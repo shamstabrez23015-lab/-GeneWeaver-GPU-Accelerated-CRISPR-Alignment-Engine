@@ -1,21 +1,23 @@
 """
 GeneWeaver: GPU-Accelerated CRISPR Alignment Engine
-Terminal Dashboard (Day 1)
+Terminal Dashboard (Day 2)
 
-A clean, modular terminal interface built with Textual for monitoring
-CRISPR genomic alignment status, processing metrics, and results.
+A clean, modular terminal interface built with Textual with a structured
+layout including a Header, Sidebar (system and engine status), Main Content
+area (processing info, progress bar at 0%, mismatch counts, alignment results),
+and Footer.
 """
 
 from __future__ import annotations
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Footer, Header, Label, ProgressBar
 
 
 class ProjectStatusPanel(Container):
-    """Panel displaying overall project and engine readiness."""
+    """Sidebar panel displaying project information and engine readiness."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -23,34 +25,39 @@ class ProjectStatusPanel(Container):
 
     def compose(self) -> ComposeResult:
         yield Label("[b]Project status:[/b] Ready", id="status-project", classes="stat-line")
-        yield Label("[b]Genome file:[/b] No FASTA file loaded", id="status-genome", classes="stat-line")
-        yield Label("[b]GPU engine status:[/b] Not connected yet", id="status-gpu-engine", classes="stat-line")
-        yield Label("[b]GPU memory:[/b] Waiting for Week 2 integration", id="status-gpu-memory", classes="stat-line")
+        yield Label("[b]Genome file:[/b] Not loaded", id="status-genome", classes="stat-line")
+        yield Label("[b]Scan status:[/b] Not started", id="status-scan", classes="stat-line")
+        yield Label("[b]CPU engine:[/b] Not started", id="status-cpu-engine", classes="stat-line")
+        yield Label("[b]GPU engine:[/b] Not connected", id="status-gpu-engine", classes="stat-line")
+        yield Label("[b]GPU memory:[/b] Not available yet", id="status-gpu-memory", classes="stat-line")
 
 
 class ProcessingInfoPanel(Container):
-    """Panel displaying CRISPR scanning and CPU/GPU processing status."""
+    """Main content panel displaying genome processing and alignment progress."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.border_title = "Processing Information"
 
     def compose(self) -> ComposeResult:
-        yield Label("[b]Scan status:[/b] Not started", id="status-scan", classes="stat-line")
-        yield Label("[b]CPU alignment status:[/b] Not started", id="status-cpu-align", classes="stat-line")
-        yield Label("[b]Alignment progress:[/b]", id="label-progress", classes="stat-line")
+        yield Label("[b]Genome batch:[/b] None", id="status-genome-batch", classes="stat-line")
+        yield Label("[b]Sequences scanned:[/b] 0", id="status-sequences-scanned", classes="stat-line")
+        yield Label("[b]Targets identified:[/b] 0", id="status-targets-identified", classes="stat-line")
+        yield Label("[b]Alignment progress:[/b] 0%", id="label-progress", classes="stat-line")
         yield ProgressBar(total=100, show_eta=False, id="alignment-progress-bar")
 
 
 class ResultsPanel(Container):
-    """Panel displaying alignment and match results."""
+    """Main content panel displaying mismatch summary and alignment results."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.border_title = "Alignment Results"
 
     def compose(self) -> ComposeResult:
-        yield Label("No results available yet.", id="results-placeholder", classes="results-empty")
+        yield Label("[b]Mismatch counts:[/b] None recorded", id="status-mismatch-counts", classes="stat-line")
+        yield Label("[b]Alignment results:[/b] No results available", id="status-alignment-results", classes="stat-line")
+        yield Label("Detailed alignment matches will appear here once scanning begins.", id="results-placeholder", classes="results-empty")
 
 
 class GeneWeaverApp(App):
@@ -62,6 +69,7 @@ class GeneWeaverApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("d", "toggle_dark", "Toggle Dark Mode", show=True),
+        Binding("h", "help", "Help", show=True),
     ]
 
     CSS = """
@@ -72,33 +80,44 @@ class GeneWeaverApp(App):
 
     #main-container {
         width: 100%;
-        height: 100%;
-        padding: 1 2;
-        layout: vertical;
+        height: 1fr;
+        layout: horizontal;
+        padding: 0 1;
     }
 
-    #panels-top-row {
-        height: auto;
-        width: 100%;
-        margin-bottom: 1;
+    #sidebar {
+        width: 36;
+        min-width: 30;
+        max-width: 42;
+        height: 100%;
+        margin-right: 1;
+        layout: vertical;
+        overflow-y: auto;
+    }
+
+    #main-content {
+        width: 1fr;
+        height: 100%;
+        layout: vertical;
+        overflow-y: auto;
     }
 
     ProjectStatusPanel {
-        width: 1fr;
-        height: auto;
+        width: 100%;
+        height: 100%;
+        min-height: 10;
         border: round $primary;
         background: $panel;
-        padding: 1 2;
-        margin-right: 1;
+        padding: 1 1;
     }
 
     ProcessingInfoPanel {
-        width: 1fr;
+        width: 100%;
         height: auto;
         border: round $accent;
         background: $panel;
-        padding: 1 2;
-        margin-left: 1;
+        padding: 1 1;
+        margin-bottom: 1;
     }
 
     ResultsPanel {
@@ -107,7 +126,7 @@ class GeneWeaverApp(App):
         min-height: 8;
         border: round $secondary;
         background: $panel;
-        padding: 1 2;
+        padding: 1 1;
     }
 
     .stat-line {
@@ -117,25 +136,35 @@ class GeneWeaverApp(App):
     #alignment-progress-bar {
         width: 100%;
         margin-top: 0;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     .results-empty {
         color: $text-muted;
-        padding: 1 0;
+        margin-top: 1;
     }
     """
+
+    def action_help(self) -> None:
+        """Display a brief help notification."""
+        self.notify(
+            "GeneWeaver v0.1 | Keys: Q = Quit, D = Toggle Theme, H = Help",
+            title="Help & Controls",
+        )
 
     def compose(self) -> ComposeResult:
         """Compose the user interface elements."""
         yield Header(show_clock=True)
         yield Container(
-            Horizontal(
+            Container(
                 ProjectStatusPanel(id="project-status-panel"),
-                ProcessingInfoPanel(id="processing-info-panel"),
-                id="panels-top-row",
+                id="sidebar",
             ),
-            ResultsPanel(id="results-panel"),
+            Container(
+                ProcessingInfoPanel(id="processing-info-panel"),
+                ResultsPanel(id="results-panel"),
+                id="main-content",
+            ),
             id="main-container",
         )
         yield Footer()
