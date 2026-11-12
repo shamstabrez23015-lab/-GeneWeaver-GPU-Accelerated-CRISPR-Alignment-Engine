@@ -1,4 +1,4 @@
-"""Unit tests for CPU alignment sequence validation in GeneWeaver."""
+"""Unit tests for CPU alignment sequence validation and off-target search in GeneWeaver."""
 
 import sys
 from pathlib import Path
@@ -9,8 +9,12 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import pytest
-from src.cpu_alignment import validate_dna_sequence
+from src.cpu_alignment import find_off_targets, validate_dna_sequence
 
+
+# ============================================================================
+# Day 1 Tests: Sequence Validation
+# ============================================================================
 
 def test_valid_dna_sequences():
     """Test that valid DNA sequences with canonical and ambiguous bases pass."""
@@ -58,3 +62,149 @@ def test_empty_sequence_handling():
     assert validate_dna_sequence("") == ""
     assert validate_dna_sequence("   ") == ""
     assert validate_dna_sequence("\n\t  \r\n") == ""
+
+
+# ============================================================================
+# Day 2 Tests: CPU Off-Target Alignment Search
+# ============================================================================
+
+def test_exact_match():
+    """Test finding an exact match with 0 mismatches."""
+    genome = "ATGC"
+    guide = "ATGC"
+    matches = find_off_targets(genome, guide, max_mismatches=0)
+    assert len(matches) == 1
+    assert matches[0].start == 0
+    assert matches[0].end == 4
+    assert matches[0].matched_sequence == "ATGC"
+    assert matches[0].mismatch_count == 0
+    assert matches[0].mismatch_positions == []
+
+
+def test_one_mismatch():
+    """Test finding a match with exactly one base mismatch."""
+    genome = "ACGC"
+    guide = "ATGC"
+    matches = find_off_targets(genome, guide, max_mismatches=1)
+    assert len(matches) == 1
+    assert matches[0].start == 0
+    assert matches[0].end == 4
+    assert matches[0].matched_sequence == "ACGC"
+    assert matches[0].mismatch_count == 1
+    assert matches[0].mismatch_positions == [1]
+
+
+def test_multiple_mismatches():
+    """Test finding a match with multiple base mismatches."""
+    genome = "ACGA"
+    guide = "ATGC"
+    matches = find_off_targets(genome, guide, max_mismatches=2)
+    assert len(matches) == 1
+    assert matches[0].start == 0
+    assert matches[0].end == 4
+    assert matches[0].matched_sequence == "ACGA"
+    assert matches[0].mismatch_count == 2
+    assert matches[0].mismatch_positions == [1, 3]
+
+
+def test_max_allowed_mismatch_threshold():
+    """Test that matches equal to max_mismatches are included, but higher are excluded."""
+    genome = "CCGC"  # mismatches at pos 0 ('C'!='A') and pos 1 ('C'!='T') = 2 mismatches against "ATGC"
+    guide = "ATGC"
+    # When threshold is 2, CCGC should be included
+    matches_allowed = find_off_targets(genome, guide, max_mismatches=2)
+    assert len(matches_allowed) == 1
+    assert matches_allowed[0].mismatch_count == 2
+
+    # When threshold is 1, CCGC should be excluded
+    matches_filtered = find_off_targets(genome, guide, max_mismatches=1)
+    assert len(matches_filtered) == 0
+
+
+def test_match_exceeding_threshold():
+    """Test that windows exceeding the mismatch threshold are omitted."""
+    genome = "CCCC"
+    guide = "ATGC"  # 3 mismatches: pos 0, 1, 2
+    matches = find_off_targets(genome, guide, max_mismatches=2)
+    assert len(matches) == 0
+
+
+def test_multiple_matching_locations():
+    """Test finding matches across multiple genomic positions in genomic order."""
+    genome = "ATGCGGATGC"
+    guide = "ATGC"
+    matches = find_off_targets(genome, guide, max_mismatches=0)
+    assert len(matches) == 2
+    assert matches[0].start == 0
+    assert matches[0].end == 4
+    assert matches[0].matched_sequence == "ATGC"
+    assert matches[1].start == 6
+    assert matches[1].end == 10
+    assert matches[1].matched_sequence == "ATGC"
+
+
+def test_correct_zero_based_coordinates():
+    """Test that zero-based start and exclusive end coordinates are accurate."""
+    genome = "TTATGCGG"  # "ATGC" starts at index 2, ends at index 6
+    guide = "ATGC"
+    matches = find_off_targets(genome, guide, max_mismatches=0)
+    assert len(matches) == 1
+    assert matches[0].start == 2
+    assert matches[0].end == 6
+    assert genome[matches[0].start : matches[0].end] == matches[0].matched_sequence
+
+
+def test_correct_mismatch_positions():
+    """Test that zero-based positions within the window are correctly recorded."""
+    genome = "GTTT"
+    guide = "ATGA"  # pos 0 ('G'!='A'), pos 2 ('T'!='G'), pos 3 ('T'!='A')
+    matches = find_off_targets(genome, guide, max_mismatches=3)
+    assert len(matches) == 1
+    assert matches[0].mismatch_positions == [0, 2, 3]
+    assert matches[0].mismatch_count == 3
+
+
+def test_genome_shorter_than_guide():
+    """Test that genome shorter than guide returns an empty list without error."""
+    assert find_off_targets("ATG", "ATGC", max_mismatches=1) == []
+    assert find_off_targets("", "ATGC", max_mismatches=1) == []
+
+
+def test_empty_guide_sequence():
+    """Test that an empty or whitespace-only guide sequence raises ValueError."""
+    with pytest.raises(ValueError) as exc_info:
+        find_off_targets("ATGC", "")
+    assert "Guide sequence cannot be empty" in str(exc_info.value)
+
+    with pytest.raises(ValueError) as exc_info:
+        find_off_targets("ATGC", "   \t\n ")
+    assert "Guide sequence cannot be empty" in str(exc_info.value)
+
+
+def test_negative_mismatch_threshold():
+    """Test that negative max_mismatches raises ValueError."""
+    with pytest.raises(ValueError) as exc_info:
+        find_off_targets("ATGC", "ATGC", max_mismatches=-1)
+    assert "non-negative" in str(exc_info.value)
+
+
+def test_ambiguous_n_mismatch():
+    """Test that ambiguous N bases are treated as mismatches when differing from guide."""
+    genome = "ATNC"
+    guide = "ATGC"
+    matches = find_off_targets(genome, guide, max_mismatches=1)
+    assert len(matches) == 1
+    assert matches[0].mismatch_positions == [2]
+    assert matches[0].mismatch_count == 1
+
+
+def test_find_off_targets_formatting():
+    """Test that find_off_targets handles lowercase input and whitespace cleanly."""
+    genome = "  a t g c   t g c a  "
+    guide = "atgc"
+    matches = find_off_targets(genome, guide, max_mismatches=0)
+    assert len(matches) == 1
+    assert matches[0].start == 0
+    assert matches[0].end == 4
+    assert matches[0].matched_sequence == "ATGC"
+
