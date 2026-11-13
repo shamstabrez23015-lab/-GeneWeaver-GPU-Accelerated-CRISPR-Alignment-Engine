@@ -101,3 +101,57 @@ def find_off_targets(
     return matches
 
 
+def find_off_targets_in_records(
+    records: list[dict],
+    guide_sequence: str,
+    max_mismatches: int = DEFAULT_MAX_MISMATCHES,
+) -> list[dict]:
+    """Search multiple FASTA records for potential CRISPR off-target alignment sites.
+
+    Processes each record dictionary and uses find_off_targets() to discover
+    matching positions in each sequence.
+
+    Args:
+        records: A list of dictionaries, each containing at least 'record_id' and 'sequence'.
+        guide_sequence: Query CRISPR guide RNA / DNA sequence.
+        max_mismatches: Maximum number of allowable mismatches (default: 3).
+
+    Returns:
+        A list of dictionaries with 'record_id' and 'matches' (list of AlignmentMatch objects),
+        preserving the original order of the input records.
+
+    Raises:
+        ValueError: If any record is missing 'record_id' or 'sequence',
+                    or if guide_sequence / max_mismatches are invalid.
+    """
+    results: list[dict] = []
+
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"Invalid record format: expected dict, got {type(record).__name__}."
+            )
+
+        if "record_id" not in record or record["record_id"] is None:
+            raise ValueError("Record is missing required 'record_id' field.")
+
+        if "sequence" not in record or record["sequence"] is None:
+            raise ValueError(
+                f"Record '{record.get('record_id')}' is missing required 'sequence' field."
+            )
+
+        matches = find_off_targets(
+            genome_sequence=record["sequence"],
+            guide_sequence=guide_sequence,
+            max_mismatches=max_mismatches,
+        )
+
+        results.append({
+            "record_id": record["record_id"],
+            "matches": matches,
+        })
+
+    return results
+
+
+

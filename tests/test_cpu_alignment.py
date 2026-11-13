@@ -9,7 +9,12 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import pytest
-from src.cpu_alignment import find_off_targets, validate_dna_sequence
+from src.cpu_alignment import (
+    find_off_targets,
+    find_off_targets_in_records,
+    validate_dna_sequence,
+)
+from src.models import AlignmentMatch
 
 
 # ============================================================================
@@ -207,4 +212,130 @@ def test_find_off_targets_formatting():
     assert matches[0].start == 0
     assert matches[0].end == 4
     assert matches[0].matched_sequence == "ATGC"
+
+
+# ============================================================================
+# Day 3 Tests: Multiple FASTA Records Alignment Search
+# ============================================================================
+
+def test_search_single_record():
+    """Test searching a single FASTA record dictionary."""
+    records = [
+        {
+            "record_id": "chr1",
+            "description": "Chromosome 1",
+            "sequence": "ATGCATGC",
+        }
+    ]
+    results = find_off_targets_in_records(records, "ATGC", max_mismatches=0)
+    assert len(results) == 1
+    assert results[0]["record_id"] == "chr1"
+    assert len(results[0]["matches"]) == 2
+    assert isinstance(results[0]["matches"][0], AlignmentMatch)
+    assert results[0]["matches"][0].start == 0
+    assert results[0]["matches"][0].end == 4
+    assert results[0]["matches"][0].matched_sequence == "ATGC"
+    assert results[0]["matches"][1].start == 4
+    assert results[0]["matches"][1].end == 8
+
+
+def test_search_multiple_records():
+    """Test searching across multiple FASTA record dictionaries."""
+    records = [
+        {"record_id": "chr1", "sequence": "ATGC"},
+        {"record_id": "chr2", "sequence": "ACGC"},
+        {"record_id": "chr3", "sequence": "CCGC"},
+    ]
+    results = find_off_targets_in_records(records, "ATGC", max_mismatches=1)
+    assert len(results) == 3
+    # chr1 has 0 mismatches
+    assert len(results[0]["matches"]) == 1
+    assert results[0]["matches"][0].mismatch_count == 0
+    # chr2 has 1 mismatch
+    assert len(results[1]["matches"]) == 1
+    assert results[1]["matches"][0].mismatch_count == 1
+    # chr3 has 2 mismatches (> 1 threshold)
+    assert len(results[2]["matches"]) == 0
+
+
+def test_preserve_record_order():
+    """Test that the order of input records is strictly preserved in the results."""
+    records = [
+        {"record_id": "chr_gamma", "sequence": "ATGC"},
+        {"record_id": "chr_alpha", "sequence": "ATGC"},
+        {"record_id": "chr_beta", "sequence": "ATGC"},
+    ]
+    results = find_off_targets_in_records(records, "ATGC", max_mismatches=0)
+    assert [r["record_id"] for r in results] == ["chr_gamma", "chr_alpha", "chr_beta"]
+
+
+def test_correct_record_ids_in_results():
+    """Test that output record_id values accurately match input records."""
+    records = [
+        {"record_id": "scaffold_001", "sequence": "ATGC"},
+        {"record_id": "scaffold_002", "sequence": "GGGG"},
+    ]
+    results = find_off_targets_in_records(records, "ATGC", max_mismatches=0)
+    assert results[0]["record_id"] == "scaffold_001"
+    assert results[1]["record_id"] == "scaffold_002"
+
+
+def test_returning_records_with_no_matches():
+    """Test that records with zero matches are included in the result list."""
+    records = [
+        {"record_id": "matching_chr", "sequence": "ATGC"},
+        {"record_id": "non_matching_chr", "sequence": "GGGG"},
+    ]
+    results = find_off_targets_in_records(records, "ATGC", max_mismatches=0)
+    assert len(results) == 2
+    assert results[0]["record_id"] == "matching_chr"
+    assert len(results[0]["matches"]) == 1
+    assert results[1]["record_id"] == "non_matching_chr"
+    assert results[1]["matches"] == []
+
+
+def test_correct_match_positions_within_each_record():
+    """Test that match start and end coordinates are accurate within each record's sequence."""
+    records = [
+        {"record_id": "chr1", "sequence": "CCATGCC"},
+        {"record_id": "chr2", "sequence": "CATGCCC"},
+    ]
+    results = find_off_targets_in_records(records, "ATGC", max_mismatches=0)
+    # chr1: ATGC starts at index 2
+    assert len(results[0]["matches"]) == 1
+    assert results[0]["matches"][0].start == 2
+    assert results[0]["matches"][0].end == 6
+    assert results[0]["matches"][0].matched_sequence == "ATGC"
+    # chr2: ATGC starts at index 1
+    assert len(results[1]["matches"]) == 1
+    assert results[1]["matches"][0].start == 1
+    assert results[1]["matches"][0].end == 5
+    assert results[1]["matches"][0].matched_sequence == "ATGC"
+
+
+def test_handling_missing_record_id():
+    """Test that a record missing 'record_id' raises a descriptive ValueError."""
+    records = [
+        {"sequence": "ATGC"}
+    ]
+    with pytest.raises(ValueError) as exc_info:
+        find_off_targets_in_records(records, "ATGC")
+    assert "record_id" in str(exc_info.value)
+
+
+def test_handling_missing_sequence():
+    """Test that a record missing 'sequence' raises a descriptive ValueError."""
+    records = [
+        {"record_id": "chr1"}
+    ]
+    with pytest.raises(ValueError) as exc_info:
+        find_off_targets_in_records(records, "ATGC")
+    assert "sequence" in str(exc_info.value)
+
+
+def test_handling_empty_records_list():
+    """Test that an empty list of records returns an empty result list without error."""
+    results = find_off_targets_in_records([], "ATGC", max_mismatches=0)
+    assert results == []
+
 
