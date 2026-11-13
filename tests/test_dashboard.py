@@ -1,5 +1,5 @@
 """
-Tests for the GeneWeaver terminal dashboard (Day 1 & Day 2).
+Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, and Day 3).
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def test_dashboard_composition() -> None:
 
 
 # =============================================================================
-# Day 2 Tests: Layout Structure, Widgets, and Identifiers
+# Preserved Day 2 Tests: Layout Structure, Widgets, and Identifiers
 # =============================================================================
 
 
@@ -141,7 +141,7 @@ def test_presence_of_progress_bar() -> None:
     assert len(progress_bars) == 1, "ProcessingInfoPanel must contain a ProgressBar"
 
     pb = progress_bars[0]
-    assert pb.id == "alignment-progress-bar"
+    assert pb.id in ("alignment-progress", "alignment-progress-bar")
     assert pb.total == 100
     assert pb.progress == 0, "Progress bar should initially start at 0%"
 
@@ -159,9 +159,10 @@ def test_presence_of_genome_and_scan_status_widgets() -> None:
     assert "status-genome" in project_widgets
     assert "Not loaded" in str(project_widgets["status-genome"].render())
 
-    # Scan status
-    assert "status-scan" in project_widgets
-    assert "Not started" in str(project_widgets["status-scan"].render())
+    # Scan status (supports stable 'scan-status' or legacy 'status-scan')
+    scan_id = "scan-status" if "scan-status" in project_widgets else "status-scan"
+    assert scan_id in project_widgets
+    assert "Not started" in str(project_widgets[scan_id].render())
 
     # CPU engine status
     assert "status-cpu-engine" in project_widgets
@@ -220,15 +221,149 @@ def test_dashboard_widgets_unique_ids() -> None:
         "results-panel",
         "status-project",
         "status-genome",
-        "status-scan",
         "status-cpu-engine",
         "status-gpu-engine",
         "status-gpu-memory",
         "label-progress",
-        "alignment-progress-bar",
         "status-mismatch-counts",
         "status-alignment-results",
         "results-placeholder",
     }
+    scan_id = "scan-status" if "scan-status" in all_ids else "status-scan"
+    expected_ids.add(scan_id)
+    progress_id = "alignment-progress" if "alignment-progress" in all_ids else "alignment-progress-bar"
+    expected_ids.add(progress_id)
+
     missing_ids = expected_ids - set(all_ids)
     assert not missing_ids, f"Missing expected widget IDs: {missing_ids}"
+
+
+# =============================================================================
+# Day 3 Tests: Dynamic Scan Status and Progress Updates
+# =============================================================================
+
+
+def test_initial_scan_status_is_not_started() -> None:
+    """Verify that initial scan status is 'Not started'."""
+    app = GeneWeaverApp()
+    assert app.scan_status == "Not started"
+    status_widget = app.query_one("#scan-status")
+    assert "Not started" in str(status_widget.render())
+
+    # Verify panel component initial display
+    panel = ProjectStatusPanel()
+    widgets = {w.id: w for w in panel.compose() if getattr(w, "id", None)}
+    assert "scan-status" in widgets
+    assert "Not started" in str(widgets["scan-status"].render())
+
+
+def test_initial_progress_is_zero() -> None:
+    """Verify that initial progress is 0%."""
+    app = GeneWeaverApp()
+    assert app.scan_progress == 0
+    pb = app.query_one("#alignment-progress", ProgressBar)
+    assert pb.progress == 0
+    assert pb.total == 100
+    label = app.query_one("#label-progress")
+    assert "0%" in str(label.render())
+
+    # Verify panel component initial display
+    proc_panel = ProcessingInfoPanel()
+    progress_bars = [w for w in proc_panel.compose() if isinstance(w, ProgressBar)]
+    assert len(progress_bars) == 1
+    assert progress_bars[0].id == "alignment-progress"
+    assert progress_bars[0].progress == 0
+
+
+def test_update_scan_status_ready() -> None:
+    """Verify updating scan status to 'Ready'."""
+    app = GeneWeaverApp()
+    app.update_scan_status("Ready")
+    assert app.scan_status == "Ready"
+    status_widget = app.query_one("#scan-status")
+    assert "Ready" in str(status_widget.render())
+
+
+def test_update_scan_status_scanning() -> None:
+    """Verify updating scan status to 'Scanning'."""
+    app = GeneWeaverApp()
+    app.update_scan_status("Scanning")
+    assert app.scan_status == "Scanning"
+    status_widget = app.query_one("#scan-status")
+    assert "Scanning" in str(status_widget.render())
+
+
+def test_update_scan_status_completed() -> None:
+    """Verify updating scan status to 'Completed'."""
+    app = GeneWeaverApp()
+    app.update_scan_status("Completed")
+    assert app.scan_status == "Completed"
+    status_widget = app.query_one("#scan-status")
+    assert "Completed" in str(status_widget.render())
+
+
+def test_update_scan_status_failed() -> None:
+    """Verify updating scan status to 'Failed'."""
+    app = GeneWeaverApp()
+    app.update_scan_status("Failed")
+    assert app.scan_status == "Failed"
+    status_widget = app.query_one("#scan-status")
+    assert "Failed" in str(status_widget.render())
+
+
+@pytest.mark.parametrize(
+    "invalid_status",
+    [
+        "In progress",
+        "pending",
+        "Complete",
+        "ERROR",
+        "finished",
+        "Unknown",
+        "",
+        "ready",
+        123,
+        None,
+    ],
+)
+def test_reject_unsupported_scan_status(invalid_status) -> None:
+    """Verify that unsupported scan statuses raise ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_scan_status(invalid_status)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("progress_val", [25, 50, 100])
+def test_update_scan_progress(progress_val: int) -> None:
+    """Verify updating progress to 25, 50, and 100."""
+    app = GeneWeaverApp()
+    app.update_scan_progress(progress_val)
+    assert app.scan_progress == progress_val
+    pb = app.query_one("#alignment-progress", ProgressBar)
+    assert pb.progress == progress_val
+    label = app.query_one("#label-progress")
+    assert f"{progress_val}%" in str(label.render())
+
+
+@pytest.mark.parametrize("below_zero", [-1, -5, -50, -100])
+def test_reject_progress_below_zero(below_zero: int) -> None:
+    """Verify that progress values below 0 raise ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_scan_progress(below_zero)
+
+
+@pytest.mark.parametrize("above_hundred", [101, 105, 150, 200, 1000])
+def test_reject_progress_above_hundred(above_hundred: int) -> None:
+    """Verify that progress values above 100 raise ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_scan_progress(above_hundred)
+
+
+@pytest.mark.parametrize("non_integer", [True, False, 25.5, "50", None, [50]])
+def test_reject_non_integer_progress(non_integer) -> None:
+    """Verify that non-integer progress values raise ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_scan_progress(non_integer)  # type: ignore[arg-type]
