@@ -25,6 +25,17 @@ Day 2:
 12. Handling a record with a missing or invalid sequence field.
 13. Ensuring extracted sequences are uppercase.
 14. Preserving the existing record format without mutation.
+
+Day 3:
+15. Lowercase DNA conversion in sequence cleaning.
+16. Removing spaces, tabs, and newline characters.
+17. Allowing valid A, T, G, C, and N bases.
+18. Rejecting unsupported characters such as X or Z.
+19. Rejecting empty or whitespace-only sequences.
+20. Validating correct sequences (returns True).
+21. Validating incorrect sequences (raises ValueError).
+22. Parsing a FASTA file with lowercase sequences.
+23. Rejecting an invalid sequence in a FASTA record.
 """
 
 from __future__ import annotations
@@ -44,9 +55,11 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 from genomic_parser import (  # noqa: E402  (import after sys.path tweak)
+    clean_dna_sequence,
     extract_sequences,
     get_sequence_by_id,
     parse_fasta,
+    validate_dna_sequence,
 )
 
 
@@ -219,7 +232,6 @@ class TestRecordIdAndDescription:
         )
         record = parse_fasta(path)[0]
         assert record["record_id"] == "seq1"
-        # BioPython sets description == id when there is no additional text
         assert record["description"] == "seq1"
 
     def test_multiple_records_ids_in_order(self, tmp_path):
@@ -267,7 +279,7 @@ class TestEmptyFastaFile:
 
 
 # ---------------------------------------------------------------------------
-# Day 2 Tests: extract_sequences
+# Day 2 Tests: extract_sequences (Preserved)
 # ---------------------------------------------------------------------------
 
 
@@ -298,11 +310,12 @@ class TestExtractSequences:
 
     def test_preserves_record_order(self):
         """Original record ordering must be strictly preserved in output."""
+        valid_seqs = ["A", "C", "G", "T", "N", "AC", "GT", "TG", "CA", "ATGC"]
         mock_records = [
-            {"record_id": f"id_{i}", "sequence": f"SEQ{i}"}
+            {"record_id": f"id_{i}", "sequence": valid_seqs[i]}
             for i in range(10)
         ]
-        expected = [f"SEQ{i}" for i in range(10)]
+        expected = valid_seqs[:]
         assert extract_sequences(mock_records) == expected
 
     def test_empty_records_list_returns_empty_list(self):
@@ -332,7 +345,7 @@ class TestExtractSequences:
         invalid_records = [
             {"record_id": "s1", "sequence": None}
         ]
-        with pytest.raises(ValueError, match="invalid|sequence"):
+        with pytest.raises(ValueError, match="string|sequence"):
             extract_sequences(invalid_records)
 
     def test_empty_string_sequence_raises_value_error(self):
@@ -340,7 +353,7 @@ class TestExtractSequences:
         invalid_records = [
             {"record_id": "s1", "sequence": ""}
         ]
-        with pytest.raises(ValueError, match="invalid|empty"):
+        with pytest.raises(ValueError, match="empty"):
             extract_sequences(invalid_records)
 
     def test_non_string_sequence_field_raises_value_error(self):
@@ -348,7 +361,7 @@ class TestExtractSequences:
         invalid_records = [
             {"record_id": "s1", "sequence": 12345}
         ]
-        with pytest.raises(ValueError, match="invalid|sequence"):
+        with pytest.raises(ValueError, match="string"):
             extract_sequences(invalid_records)
 
     def test_non_dict_record_raises_value_error(self):
@@ -359,7 +372,7 @@ class TestExtractSequences:
 
 
 # ---------------------------------------------------------------------------
-# Day 2 Tests: get_sequence_by_id
+# Day 2 Tests: get_sequence_by_id (Preserved)
 # ---------------------------------------------------------------------------
 
 
@@ -420,12 +433,12 @@ class TestGetSequenceById:
         mock_records = [
             {"record_id": "bad_record", "sequence": "   "}
         ]
-        with pytest.raises(ValueError, match="sequence"):
+        with pytest.raises(ValueError, match="empty"):
             get_sequence_by_id(mock_records, "bad_record")
 
 
 # ---------------------------------------------------------------------------
-# Day 2 Tests: Record Format Preservation & Non-Mutation
+# Day 2 Tests: Record Format Preservation & Non-Mutation (Preserved)
 # ---------------------------------------------------------------------------
 
 
@@ -465,3 +478,129 @@ class TestRecordFormatPreservation:
         snapshot = copy.deepcopy(original_records)
         get_sequence_by_id(original_records, "r1")
         assert original_records == snapshot
+
+
+# ---------------------------------------------------------------------------
+# Day 3 Tests: clean_dna_sequence and validate_dna_sequence
+# ---------------------------------------------------------------------------
+
+
+class TestCleanDnaSequence:
+    """Tests for clean_dna_sequence(sequence)."""
+
+    def test_lowercase_dna_conversion(self):
+        """Lowercase nucleotides must be converted to uppercase."""
+        assert clean_dna_sequence("atgc") == "ATGC"
+        assert clean_dna_sequence("atgcn") == "ATGCN"
+        assert clean_dna_sequence("aTgCn") == "ATGCN"
+
+    def test_removing_spaces_and_newline_characters(self):
+        """Spaces, tabs, carriage returns, and newlines must be stripped from sequence."""
+        assert clean_dna_sequence(" A T G C ") == "ATGC"
+        assert clean_dna_sequence("A\tT\nG\r\nC\tN") == "ATGCN"
+        assert clean_dna_sequence("  ATGC  \n  ACTG  \r\n  GGTT  ") == "ATGCACTGGGTT"
+
+    def test_valid_bases_atgcn(self):
+        """A, T, G, C, and N are all permitted and preserved."""
+        assert clean_dna_sequence("A") == "A"
+        assert clean_dna_sequence("T") == "T"
+        assert clean_dna_sequence("G") == "G"
+        assert clean_dna_sequence("C") == "C"
+        assert clean_dna_sequence("N") == "N"
+        assert clean_dna_sequence("ATGCN") == "ATGCN"
+        assert clean_dna_sequence("NNNN") == "NNNN"
+
+    def test_rejecting_unsupported_characters_x_or_z(self):
+        """Unsupported characters such as X or Z must raise ValueError."""
+        with pytest.raises(ValueError, match="Unsupported DNA character"):
+            clean_dna_sequence("ATGCX")
+        with pytest.raises(ValueError, match="Unsupported DNA character"):
+            clean_dna_sequence("ZATG")
+        with pytest.raises(ValueError, match="Unsupported DNA character"):
+            clean_dna_sequence("ATGCXZ")
+        with pytest.raises(ValueError, match="Unsupported DNA character"):
+            clean_dna_sequence("ATGC-NN")
+
+    def test_rejecting_empty_sequences(self):
+        """Empty sequence or whitespace-only sequence must raise ValueError."""
+        with pytest.raises(ValueError, match="empty"):
+            clean_dna_sequence("")
+        with pytest.raises(ValueError, match="empty"):
+            clean_dna_sequence("   ")
+        with pytest.raises(ValueError, match="empty"):
+            clean_dna_sequence("\t\n\r  ")
+
+    def test_non_string_sequence_raises_value_error(self):
+        """Non-string sequence input must raise ValueError."""
+        with pytest.raises(ValueError, match="must be a string"):
+            clean_dna_sequence(12345)  # type: ignore[arg-type]
+
+
+class TestValidateDnaSequence:
+    """Tests for validate_dna_sequence(sequence)."""
+
+    def test_validating_a_correct_sequence(self):
+        """Valid non-empty sequences should return True."""
+        assert validate_dna_sequence("ATGC") is True
+        assert validate_dna_sequence("atgcn") is True
+        assert validate_dna_sequence("  A T \t G \n C N \r\n") is True
+        assert validate_dna_sequence("NNNN") is True
+
+    def test_validating_an_incorrect_sequence(self):
+        """Invalid sequences must raise ValueError."""
+        with pytest.raises(ValueError):
+            validate_dna_sequence("ATGCX")
+        with pytest.raises(ValueError):
+            validate_dna_sequence("ZATGC")
+        with pytest.raises(ValueError):
+            validate_dna_sequence("")
+        with pytest.raises(ValueError):
+            validate_dna_sequence("   \n\t")
+
+
+class TestParseFastaCleaningAndValidation:
+    """Tests for parse_fasta sequence cleaning and validation."""
+
+    def test_parsing_fasta_with_lowercase_sequences(self, tmp_path):
+        """FASTA files with lowercase sequences must be cleaned and uppercased."""
+        content = (
+            ">seq1 BRCA1 fragment\natgcttag\n"
+            ">seq2 TP53 fragment\nggccnntt\n"
+        )
+        path = _write_fasta(tmp_path, "lower_valid.fasta", content)
+        records = parse_fasta(path)
+        assert len(records) == 2
+        assert records[0]["record_id"] == "seq1"
+        assert records[0]["description"] == "seq1 BRCA1 fragment"
+        assert records[0]["sequence"] == "ATGCTTAG"
+        assert records[1]["record_id"] == "seq2"
+        assert records[1]["description"] == "seq2 TP53 fragment"
+        assert records[1]["sequence"] == "GGCCNNTT"
+
+    def test_parsing_fasta_with_spaces_and_newlines_in_sequence(self, tmp_path):
+        """FASTA records with internal whitespace or multiline breaks are cleaned."""
+        content = (
+            ">seq1 Multiline with spaces\nAT GC\nTT GG\nNN CC\n"
+        )
+        path = _write_fasta(tmp_path, "whitespace.fasta", content)
+        records = parse_fasta(path)
+        assert records[0]["sequence"] == "ATGCTTGGNNCC"
+
+    def test_rejecting_invalid_sequence_in_fasta_record(self, tmp_path):
+        """FASTA records with invalid characters (e.g. X, Z) must raise ValueError."""
+        content = (
+            ">valid_record\nATGC\n"
+            ">corrupt_record\nATGCXNN\n"
+        )
+        path = _write_fasta(tmp_path, "corrupt.fasta", content)
+        with pytest.raises(ValueError, match="corrupt_record|Unsupported"):
+            parse_fasta(path)
+
+    def test_rejecting_empty_sequence_in_fasta_record(self, tmp_path):
+        """FASTA records with empty sequence must raise ValueError."""
+        content = (
+            ">empty_seq_record\n\n"
+        )
+        path = _write_fasta(tmp_path, "empty_seq.fasta", content)
+        with pytest.raises(ValueError):
+            parse_fasta(path)

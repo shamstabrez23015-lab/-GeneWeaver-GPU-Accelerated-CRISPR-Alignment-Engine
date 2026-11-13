@@ -1,14 +1,14 @@
 """
 genomic_parser.py
 -----------------
-Day 1 & Day 2 – GeneWeaver: Genomic Parser Module
+Day 1, Day 2 & Day 3 – GeneWeaver: Genomic Parser Module
 
-Provides FASTA file parsing and sequence extraction utilities using BioPython's SeqIO module.
-Responsible for reading genomic FASTA records, extracting DNA sequences, and
-retrieving sequences by record ID ready for downstream processing (alignment, validation, etc.).
+Provides FASTA file parsing, sequence extraction, DNA sequence cleaning,
+and sequence validation utilities using BioPython's SeqIO module.
+Responsible for reading genomic FASTA records, extracting cleaned DNA sequences,
+and retrieving sequences by record ID ready for downstream processing (alignment, etc.).
 
-Note: Sequence cleaning, validation, and genome chunking are deferred to
-later days and are intentionally *not* implemented here.
+Note: Genome chunking is deferred to later days and is intentionally *not* implemented here.
 """
 
 from __future__ import annotations
@@ -17,6 +17,88 @@ import os
 from typing import Any
 
 from Bio import SeqIO
+
+# Allowed DNA nucleotides: A, T, G, C, plus N for ambiguous/unknown bases
+VALID_DNA_CHARACTERS: frozenset[str] = frozenset({"A", "T", "G", "C", "N"})
+
+
+def clean_dna_sequence(sequence: str) -> str:
+    """Clean and validate a DNA sequence string.
+
+    Removes spaces, tabs, and newline characters, converts the sequence to
+    uppercase, and verifies that only valid DNA characters (A, T, G, C, N)
+    are present. N is preserved as an unknown or ambiguous base.
+
+    Parameters
+    ----------
+    sequence:
+        The raw DNA sequence string to clean and validate.
+
+    Returns
+    -------
+    str
+        The cleaned, uppercase DNA sequence.
+
+    Raises
+    ------
+    ValueError
+        If *sequence* is not a string, contains unsupported characters,
+        or is empty after removing whitespace.
+
+    Examples
+    --------
+    >>> clean_dna_sequence("  atgc \\n\\t ttgN  ")
+    'ATGCTTAGN'
+    """
+    if not isinstance(sequence, str):
+        raise ValueError(
+            f"DNA sequence must be a string, got {type(sequence).__name__}."
+        )
+
+    # Remove spaces, tabs, and newline characters (\r, \n)
+    cleaned = "".join(c for c in sequence if c not in " \t\n\r")
+    cleaned = cleaned.upper()
+
+    if not cleaned:
+        raise ValueError("DNA sequence is empty after cleaning.")
+
+    # Validate against allowed DNA characters (A, T, G, C, N)
+    invalid_chars = set(cleaned) - VALID_DNA_CHARACTERS
+    if invalid_chars:
+        sorted_invalid = sorted(invalid_chars)
+        raise ValueError(
+            f"Unsupported DNA character(s) found in sequence: {sorted_invalid}. "
+            "Only A, T, G, C, and N are allowed."
+        )
+
+    return cleaned
+
+
+def validate_dna_sequence(sequence: str) -> bool:
+    """Validate a DNA sequence string using :func:`clean_dna_sequence`.
+
+    Parameters
+    ----------
+    sequence:
+        The DNA sequence string to validate.
+
+    Returns
+    -------
+    bool
+        True if the sequence is valid and non-empty.
+
+    Raises
+    ------
+    ValueError
+        If the sequence is empty, not a string, or contains unsupported characters.
+
+    Examples
+    --------
+    >>> validate_dna_sequence("ATGC")
+    True
+    """
+    clean_dna_sequence(sequence)
+    return True
 
 
 def parse_fasta(file_path: str) -> list[dict[str, Any]]:
@@ -28,8 +110,8 @@ def parse_fasta(file_path: str) -> list[dict[str, Any]]:
                              space on the header line, e.g. ``seq1``).
     - ``description`` (str): The full header string, including the identifier
                              (e.g. ``seq1 Human BRCA1 exon 2``).
-    - ``sequence``    (str): The DNA sequence in uppercase (multi-line FASTA
-                             sequences are automatically concatenated).
+    - ``sequence``    (str): The cleaned DNA sequence in uppercase containing
+                             only valid nucleotides (A, T, G, C, N).
 
     Parameters
     ----------
@@ -46,7 +128,8 @@ def parse_fasta(file_path: str) -> list[dict[str, Any]]:
     FileNotFoundError
         If *file_path* does not point to an existing file.
     ValueError
-        If the FASTA file exists but contains no sequence records.
+        If the FASTA file exists but contains no sequence records, or if any
+        record contains an invalid or empty DNA sequence.
 
     Examples
     --------
@@ -66,11 +149,19 @@ def parse_fasta(file_path: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     with open(file_path, "r", encoding="utf-8") as handle:
         for seq_record in SeqIO.parse(handle, "fasta"):
+            raw_seq = str(seq_record.seq)
+            try:
+                cleaned_seq = clean_dna_sequence(raw_seq)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid DNA sequence in record '{seq_record.id}': {exc}"
+                ) from exc
+
             records.append(
                 {
                     "record_id": seq_record.id,
                     "description": seq_record.description,
-                    "sequence": str(seq_record.seq).upper(),
+                    "sequence": cleaned_seq,
                 }
             )
 
@@ -88,7 +179,7 @@ def extract_sequences(records: list[dict[str, Any]]) -> list[str]:
     """Extract DNA sequences from a list of FASTA record dictionaries.
 
     Preserves the original record order and guarantees that all returned
-    sequences are uppercase strings.
+    sequences are cleaned uppercase strings.
 
     Parameters
     ----------
@@ -99,7 +190,7 @@ def extract_sequences(records: list[dict[str, Any]]) -> list[str]:
     Returns
     -------
     list[str]
-        A list of uppercase DNA sequence strings in the same order as *records*.
+        A list of cleaned uppercase DNA sequence strings in the same order as *records*.
         Returns an empty list if *records* is empty.
 
     Raises
@@ -126,11 +217,8 @@ def extract_sequences(records: list[dict[str, Any]]) -> list[str]:
                 f"Record is missing required 'sequence' field: {record}"
             )
         seq = record["sequence"]
-        if not isinstance(seq, str) or not seq.strip():
-            raise ValueError(
-                f"Record contains an invalid or empty sequence field: {record}"
-            )
-        sequences.append(seq.upper())
+        cleaned = clean_dna_sequence(seq)
+        sequences.append(cleaned)
 
     return sequences
 
@@ -151,7 +239,7 @@ def get_sequence_by_id(
     Returns
     -------
     str
-        The DNA sequence of the matching record in uppercase.
+        The cleaned DNA sequence of the matching record in uppercase.
 
     Raises
     ------
@@ -173,10 +261,6 @@ def get_sequence_by_id(
                     f"Record with ID '{record_id}' is missing required 'sequence' field."
                 )
             seq = record["sequence"]
-            if not isinstance(seq, str) or not seq.strip():
-                raise ValueError(
-                    f"Record with ID '{record_id}' contains an invalid or empty sequence field."
-                )
-            return seq.upper()
+            return clean_dna_sequence(seq)
 
     raise KeyError(f"Record with ID '{record_id}' not found.")
