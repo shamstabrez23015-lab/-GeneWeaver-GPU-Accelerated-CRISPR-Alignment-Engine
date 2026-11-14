@@ -1,14 +1,13 @@
 """
 genomic_parser.py
 -----------------
-Day 1, Day 2 & Day 3 – GeneWeaver: Genomic Parser Module
+Day 1, Day 2, Day 3 & Day 4 – GeneWeaver: Genomic Parser Module
 
 Provides FASTA file parsing, sequence extraction, DNA sequence cleaning,
-and sequence validation utilities using BioPython's SeqIO module.
+validation, and genomic sequence chunking utilities using BioPython's SeqIO module.
 Responsible for reading genomic FASTA records, extracting cleaned DNA sequences,
-and retrieving sequences by record ID ready for downstream processing (alignment, etc.).
-
-Note: Genome chunking is deferred to later days and is intentionally *not* implemented here.
+retrieving sequences by record ID, and partitioning sequences into chunks
+ready for downstream processing (alignment, etc.).
 """
 
 from __future__ import annotations
@@ -17,6 +16,14 @@ import os
 from typing import Any
 
 from Bio import SeqIO
+
+try:
+    from config import DEFAULT_CHUNK_SIZE
+except ImportError:
+    try:
+        from src.config import DEFAULT_CHUNK_SIZE  # type: ignore[import-not-found]
+    except ImportError:
+        DEFAULT_CHUNK_SIZE: int = 10_000
 
 # Allowed DNA nucleotides: A, T, G, C, plus N for ambiguous/unknown bases
 VALID_DNA_CHARACTERS: frozenset[str] = frozenset({"A", "T", "G", "C", "N"})
@@ -264,3 +271,138 @@ def get_sequence_by_id(
             return clean_dna_sequence(seq)
 
     raise KeyError(f"Record with ID '{record_id}' not found.")
+
+
+def chunk_sequence(
+    sequence: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> list[dict[str, Any]]:
+    """Divide a DNA sequence into chunks of the specified size.
+
+    Parameters
+    ----------
+    sequence:
+        The cleaned DNA sequence string to partition.
+    chunk_size:
+        The maximum length of each chunk. Must be a positive integer.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        A list of dictionaries representing each chunk:
+        - ``chunk_index`` (int): Zero-based index of the chunk.
+        - ``start``       (int): Inclusive 0-based start index.
+        - ``end``         (int): Exclusive 0-based end index.
+        - ``sequence``    (str): The nucleotide subsequence.
+        Returns an empty list if *sequence* is empty.
+
+    Raises
+    ------
+    ValueError
+        If *chunk_size* is <= 0, or if *sequence* contains invalid DNA characters.
+
+    Examples
+    --------
+    >>> chunk_sequence("ATGCAT", chunk_size=4)
+    [{'chunk_index': 0, 'start': 0, 'end': 4, 'sequence': 'ATGC'}, {'chunk_index': 1, 'start': 4, 'end': 6, 'sequence': 'AT'}]
+    """
+    if chunk_size <= 0:
+        raise ValueError(
+            f"chunk_size must be a positive integer, got {chunk_size}."
+        )
+
+    if not isinstance(sequence, str):
+        raise ValueError(
+            f"sequence must be a string, got {type(sequence).__name__}."
+        )
+
+    if not sequence:
+        return []
+
+    validate_dna_sequence(sequence)
+
+    chunks: list[dict[str, Any]] = []
+    seq_len = len(sequence)
+    chunk_index = 0
+    for start in range(0, seq_len, chunk_size):
+        end = min(start + chunk_size, seq_len)
+        chunks.append(
+            {
+                "chunk_index": chunk_index,
+                "start": start,
+                "end": end,
+                "sequence": sequence[start:end],
+            }
+        )
+        chunk_index += 1
+
+    return chunks
+
+
+def chunk_fasta_records(
+    records: list[dict[str, Any]],
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> list[dict[str, Any]]:
+    """Chunk the sequences of multiple FASTA records.
+
+    Parameters
+    ----------
+    records:
+        A list of FASTA record dictionaries (as returned by :func:`parse_fasta`).
+        Each dictionary must contain ``'record_id'`` and ``'sequence'``.
+    chunk_size:
+        The maximum number of nucleotides per chunk. Must be positive.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        A list of dictionaries preserving record order:
+        ``[{"record_id": str, "chunks": list[dict]}]``.
+
+    Raises
+    ------
+    ValueError
+        If *chunk_size* is <= 0, or if any record is missing ``'record_id'``
+        or ``'sequence'``, or contains an invalid sequence.
+
+    Examples
+    --------
+    >>> recs = [{"record_id": "chr1", "sequence": "ATGC"}]
+    >>> chunk_fasta_records(recs, chunk_size=2)
+    [{'record_id': 'chr1', 'chunks': [{'chunk_index': 0, 'start': 0, 'end': 2, 'sequence': 'AT'}, {'chunk_index': 1, 'start': 2, 'end': 4, 'sequence': 'GC'}]}]
+    """
+    if chunk_size <= 0:
+        raise ValueError(
+            f"chunk_size must be a positive integer, got {chunk_size}."
+        )
+
+    chunked_records: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"Record must be a dictionary, got {type(record).__name__}."
+            )
+        if "record_id" not in record or record["record_id"] is None:
+            raise ValueError(
+                f"Record is missing required 'record_id' field: {record}"
+            )
+        if "sequence" not in record or record["sequence"] is None:
+            raise ValueError(
+                f"Record is missing required 'sequence' field: {record}"
+            )
+
+        seq = record["sequence"]
+        if not isinstance(seq, str):
+            raise ValueError(
+                f"Record 'sequence' must be a string, got {type(seq).__name__}."
+            )
+
+        chunks = chunk_sequence(seq, chunk_size=chunk_size)
+        chunked_records.append(
+            {
+                "record_id": record["record_id"],
+                "chunks": chunks,
+            }
+        )
+
+    return chunked_records

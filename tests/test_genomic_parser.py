@@ -36,6 +36,19 @@ Day 3:
 21. Validating incorrect sequences (raises ValueError).
 22. Parsing a FASTA file with lowercase sequences.
 23. Rejecting an invalid sequence in a FASTA record.
+
+Day 4:
+24. Splitting a sequence into equal-sized chunks.
+25. Handling a smaller final chunk.
+26. Correct zero-based chunk indexes.
+27. Correct start (inclusive) and end (exclusive) coordinates.
+28. Reconstructing the original sequence by joining chunks.
+29. Rejecting zero and negative chunk size.
+30. Handling an empty sequence (returns empty list).
+31. Chunking multiple FASTA records.
+32. Preserving record IDs and record order.
+33. Handling records with empty sequences (includes record with empty chunks).
+34. Validating missing record ID and sequence fields.
 """
 
 from __future__ import annotations
@@ -56,6 +69,8 @@ if _SRC_DIR not in sys.path:
 
 from genomic_parser import (  # noqa: E402  (import after sys.path tweak)
     clean_dna_sequence,
+    chunk_fasta_records,
+    chunk_sequence,
     extract_sequences,
     get_sequence_by_id,
     parse_fasta,
@@ -481,7 +496,7 @@ class TestRecordFormatPreservation:
 
 
 # ---------------------------------------------------------------------------
-# Day 3 Tests: clean_dna_sequence and validate_dna_sequence
+# Day 3 Tests: clean_dna_sequence and validate_dna_sequence (Preserved)
 # ---------------------------------------------------------------------------
 
 
@@ -604,3 +619,199 @@ class TestParseFastaCleaningAndValidation:
         path = _write_fasta(tmp_path, "empty_seq.fasta", content)
         with pytest.raises(ValueError):
             parse_fasta(path)
+
+
+# ---------------------------------------------------------------------------
+# Day 4 Tests: chunk_sequence and chunk_fasta_records
+# ---------------------------------------------------------------------------
+
+
+class TestChunkSequence:
+    """Tests for chunk_sequence(sequence, chunk_size)."""
+
+    def test_splitting_sequence_into_equal_chunks(self):
+        """A sequence divided evenly into equal-sized chunks."""
+        seq = "ATGC" * 15  # 60 bp
+        chunk_size = 20
+        chunks = chunk_sequence(seq, chunk_size=chunk_size)
+
+        assert len(chunks) == 3
+        for chunk in chunks:
+            assert len(chunk["sequence"]) == 20
+
+    def test_handling_smaller_final_chunk(self):
+        """The final chunk can be smaller than chunk_size."""
+        seq = "ACGTACGTNN"  # 10 bp
+        chunk_size = 4
+        chunks = chunk_sequence(seq, chunk_size=chunk_size)
+
+        assert len(chunks) == 3
+        assert len(chunks[0]["sequence"]) == 4
+        assert len(chunks[1]["sequence"]) == 4
+        assert len(chunks[2]["sequence"]) == 2
+        assert chunks[2]["sequence"] == "NN"
+
+    def test_correct_chunk_indexes(self):
+        """Chunk indexes must be zero-based sequential integers."""
+        seq = "ATGC" * 10  # 40 bp
+        chunks = chunk_sequence(seq, chunk_size=10)
+
+        assert len(chunks) == 4
+        assert [c["chunk_index"] for c in chunks] == [0, 1, 2, 3]
+
+    def test_correct_start_and_end_coordinates(self):
+        """Start coordinate must be inclusive and end coordinate exclusive."""
+        seq = "ACGTACGTNN"  # 10 bp
+        chunks = chunk_sequence(seq, chunk_size=4)
+
+        assert chunks[0]["start"] == 0
+        assert chunks[0]["end"] == 4
+        assert chunks[1]["start"] == 4
+        assert chunks[1]["end"] == 8
+        assert chunks[2]["start"] == 8
+        assert chunks[2]["end"] == 10
+
+        for chunk in chunks:
+            assert seq[chunk["start"]:chunk["end"]] == chunk["sequence"]
+
+    def test_reconstructing_original_sequence_by_joining_chunks(self):
+        """Joining all chunk sequences must reconstruct the original sequence exactly."""
+        seq = "ACGT" * 25 + "NNNN"  # 104 bp
+        chunks = chunk_sequence(seq, chunk_size=15)
+        reconstructed = "".join(chunk["sequence"] for chunk in chunks)
+        assert reconstructed == seq
+
+    def test_rejecting_zero_chunk_size(self):
+        """chunk_size=0 must raise ValueError."""
+        with pytest.raises(ValueError, match="positive"):
+            chunk_sequence("ATGC", chunk_size=0)
+
+    def test_rejecting_negative_chunk_size(self):
+        """chunk_size < 0 must raise ValueError."""
+        with pytest.raises(ValueError, match="positive"):
+            chunk_sequence("ATGC", chunk_size=-10)
+
+    def test_handling_empty_sequence(self):
+        """An empty sequence must return an empty list of chunks."""
+        assert chunk_sequence("", chunk_size=100) == []
+
+    def test_chunk_sequence_validates_sequence(self):
+        """Sequences with unsupported characters must raise ValueError."""
+        with pytest.raises(ValueError, match="Unsupported DNA character"):
+            chunk_sequence("ATGCXNN", chunk_size=10)
+
+    def test_chunk_sequence_default_chunk_size(self):
+        """Calling chunk_sequence without chunk_size uses DEFAULT_CHUNK_SIZE."""
+        seq = "ATGC" * 10
+        chunks = chunk_sequence(seq)
+        assert len(chunks) == 1
+        assert chunks[0]["chunk_index"] == 0
+        assert chunks[0]["start"] == 0
+        assert chunks[0]["end"] == 40
+        assert chunks[0]["sequence"] == seq
+
+
+class TestChunkFastaRecords:
+    """Tests for chunk_fasta_records(records, chunk_size)."""
+
+    def test_chunking_multiple_fasta_records_from_file(self, tmp_path):
+        """Chunk multiple records parsed from a FASTA file."""
+        content = (
+            ">chr1 Chromosome 1\n"
+            "ACGTACGTACGT\n"  # 12 bp
+            ">chr2 Chromosome 2\n"
+            "GGCCAATT\n"        # 8 bp
+        )
+        path = _write_fasta(tmp_path, "multi_chunk.fasta", content)
+        records = parse_fasta(path)
+        chunked = chunk_fasta_records(records, chunk_size=5)
+
+        assert len(chunked) == 2
+        assert chunked[0]["record_id"] == "chr1"
+        assert len(chunked[0]["chunks"]) == 3  # 5, 5, 2
+        assert chunked[0]["chunks"][0]["sequence"] == "ACGTA"
+        assert chunked[0]["chunks"][1]["sequence"] == "CGTAC"
+        assert chunked[0]["chunks"][2]["sequence"] == "GT"
+
+        assert chunked[1]["record_id"] == "chr2"
+        assert len(chunked[1]["chunks"]) == 2  # 5, 3
+        assert chunked[1]["chunks"][0]["sequence"] == "GGCCA"
+        assert chunked[1]["chunks"][1]["sequence"] == "ATT"
+
+    def test_preserving_record_ids_and_record_order(self):
+        """Record IDs and original ordering must be preserved."""
+        mock_records = [
+            {"record_id": f"scaffold_{i}", "sequence": "ACGT" * 5}
+            for i in range(5)
+        ]
+        chunked = chunk_fasta_records(mock_records, chunk_size=10)
+        assert [r["record_id"] for r in chunked] == [f"scaffold_{i}" for i in range(5)]
+
+    def test_handling_record_with_empty_sequence(self):
+        """Records with empty sequences should be included with empty chunk lists."""
+        mock_records = [
+            {"record_id": "valid_rec", "sequence": "ATGC"},
+            {"record_id": "empty_rec", "sequence": ""},
+        ]
+        chunked = chunk_fasta_records(mock_records, chunk_size=2)
+        assert len(chunked) == 2
+        assert chunked[0]["record_id"] == "valid_rec"
+        assert len(chunked[0]["chunks"]) == 2
+        assert chunked[1]["record_id"] == "empty_rec"
+        assert chunked[1]["chunks"] == []
+
+    def test_handling_missing_sequence_field(self):
+        """Record missing 'sequence' key must raise ValueError."""
+        bad_records = [
+            {"record_id": "chr1"}
+        ]
+        with pytest.raises(ValueError, match="sequence"):
+            chunk_fasta_records(bad_records, chunk_size=10)
+
+    def test_handling_none_sequence_field(self):
+        """Record with sequence=None must raise ValueError."""
+        bad_records = [
+            {"record_id": "chr1", "sequence": None}
+        ]
+        with pytest.raises(ValueError, match="sequence"):
+            chunk_fasta_records(bad_records, chunk_size=10)
+
+    def test_handling_missing_record_id_field(self):
+        """Record missing 'record_id' must raise ValueError."""
+        bad_records = [
+            {"sequence": "ATGC"}
+        ]
+        with pytest.raises(ValueError, match="record_id"):
+            chunk_fasta_records(bad_records, chunk_size=10)
+
+    def test_rejecting_non_dict_record(self):
+        """Passing non-dict records must raise ValueError."""
+        with pytest.raises(ValueError, match="dictionary"):
+            chunk_fasta_records(["not a dict"], chunk_size=10)  # type: ignore[list-item]
+
+    def test_rejecting_zero_or_negative_chunk_size(self):
+        """Non-positive chunk size must raise ValueError."""
+        mock_records = [{"record_id": "chr1", "sequence": "ATGC"}]
+        with pytest.raises(ValueError, match="positive"):
+            chunk_fasta_records(mock_records, chunk_size=0)
+        with pytest.raises(ValueError, match="positive"):
+            chunk_fasta_records(mock_records, chunk_size=-5)
+
+    def test_coordinates_are_relative_to_original_record(self):
+        """Coordinates start and end are 0-based relative to each original record."""
+        mock_records = [
+            {"record_id": "chrA", "sequence": "AAAAATTTTT"},
+            {"record_id": "chrB", "sequence": "CCCCCGGGGG"},
+        ]
+        chunked = chunk_fasta_records(mock_records, chunk_size=5)
+
+        # Both records must have their first chunk start at 0
+        assert chunked[0]["chunks"][0]["start"] == 0
+        assert chunked[0]["chunks"][0]["end"] == 5
+        assert chunked[0]["chunks"][1]["start"] == 5
+        assert chunked[0]["chunks"][1]["end"] == 10
+
+        assert chunked[1]["chunks"][0]["start"] == 0
+        assert chunked[1]["chunks"][0]["end"] == 5
+        assert chunked[1]["chunks"][1]["start"] == 5
+        assert chunked[1]["chunks"][1]["end"] == 10
