@@ -1,12 +1,14 @@
 """
-Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, and Day 3).
+Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, Day 3, and Day 4).
 """
 
 from __future__ import annotations
 
+import asyncio as _asyncio
+
 import pytest
 from textual.containers import Container
-from textual.widgets import Footer, Header, Label, ProgressBar
+from textual.widgets import DataTable, Footer, Header, Label, ProgressBar
 
 from src.dashboard import (
     GeneWeaverApp,
@@ -228,6 +230,7 @@ def test_dashboard_widgets_unique_ids() -> None:
         "status-mismatch-counts",
         "status-alignment-results",
         "results-placeholder",
+        "alignment-results-table",
     }
     scan_id = "scan-status" if "scan-status" in all_ids else "status-scan"
     expected_ids.add(scan_id)
@@ -367,3 +370,307 @@ def test_reject_non_integer_progress(non_integer) -> None:
     app = GeneWeaverApp()
     with pytest.raises(ValueError):
         app.update_scan_progress(non_integer)  # type: ignore[arg-type]
+
+
+# =============================================================================
+# Day 4 Tests: Alignment Results DataTable
+# =============================================================================
+
+
+def _run(coro):
+    """Run an async coroutine synchronously (no external async plugin needed)."""
+    return _asyncio.run(coro)
+
+
+# ---------------------------------------------------------------------------
+# Sample test data — manually crafted for testing only.
+# These do NOT represent real genomic scan output.
+# ---------------------------------------------------------------------------
+_SAMPLE_RESULT_1 = {
+    "record_id": "REC-001",
+    "start": 100,
+    "end": 123,
+    "matched_sequence": "ACGTACGTACGT",
+    "mismatch_count": 0,
+    "mismatch_positions": [],
+}
+_SAMPLE_RESULT_2 = {
+    "record_id": "REC-002",
+    "start": 500,
+    "end": 523,
+    "matched_sequence": "TTGCAATTGCAA",
+    "mismatch_count": 2,
+    "mismatch_positions": [3, 9],
+}
+_SAMPLE_RESULT_3 = {
+    "record_id": "REC-003",
+    "start": 1050,
+    "end": 1073,
+    "matched_sequence": "GCGCGCGCGCGC",
+    "mismatch_count": 1,
+    "mismatch_positions": [6],
+}
+
+
+# ------------------------------------------------------------------
+# Structure tests — no live app needed; inspect compose() output
+# ------------------------------------------------------------------
+
+
+def test_results_panel_contains_data_table() -> None:
+    """Verify ResultsPanel composes a DataTable with the correct stable ID."""
+    panel = ResultsPanel()
+    composed = list(panel.compose())
+    tables = [w for w in composed if isinstance(w, DataTable)]
+    assert len(tables) == 1, "ResultsPanel must contain exactly one DataTable"
+    assert tables[0].id == "alignment-results-table"
+
+
+def test_results_panel_column_definitions() -> None:
+    """Verify ResultsPanel declares exactly five columns with expected labels."""
+    expected_labels = {
+        "Record ID",
+        "Start Position",
+        "End Position",
+        "Matched Sequence",
+        "Mismatch Count",
+    }
+    actual_labels = {label for label, _ in ResultsPanel._COLUMNS}
+    assert actual_labels == expected_labels, (
+        f"Column labels mismatch.\nExpected: {expected_labels}\nGot: {actual_labels}"
+    )
+    assert len(ResultsPanel._COLUMNS) == 5, "ResultsPanel must define exactly 5 columns"
+
+
+def test_update_alignment_results_method_exists() -> None:
+    """Verify GeneWeaverApp exposes update_alignment_results as a callable."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "update_alignment_results")
+    assert callable(app.update_alignment_results)
+
+
+# ------------------------------------------------------------------
+# Runtime tests — driven via asyncio.run() + Textual's run_test()
+# ------------------------------------------------------------------
+
+
+def test_table_exists_in_running_app() -> None:
+    """Verify the DataTable widget is queryable once the app is running."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table is not None
+    _run(_inner())
+
+
+def test_table_has_five_columns() -> None:
+    """Verify the alignment results table has exactly five columns."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert len(table.columns) == 5
+    _run(_inner())
+
+
+def test_table_column_labels() -> None:
+    """Verify all five column labels are present and correct."""
+    expected = {
+        "Record ID",
+        "Start Position",
+        "End Position",
+        "Matched Sequence",
+        "Mismatch Count",
+    }
+
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            table = app.query_one("#alignment-results-table", DataTable)
+            actual = {str(col.label) for col in table.columns.values()}
+            assert actual == expected
+    _run(_inner())
+
+
+def test_table_initially_empty() -> None:
+    """Verify the alignment results table starts with zero rows."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 0
+    _run(_inner())
+
+
+def test_add_single_alignment_result() -> None:
+    """Verify adding one result produces exactly one table row."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.update_alignment_results([_SAMPLE_RESULT_1])
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 1
+    _run(_inner())
+
+
+def test_add_multiple_alignment_results() -> None:
+    """Verify adding three results produces exactly three table rows."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.update_alignment_results(
+                [_SAMPLE_RESULT_1, _SAMPLE_RESULT_2, _SAMPLE_RESULT_3]
+            )
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 3
+    _run(_inner())
+
+
+def test_correct_record_ids_and_positions() -> None:
+    """Verify record_id and genomic positions are stored correctly in the table."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.update_alignment_results([_SAMPLE_RESULT_1, _SAMPLE_RESULT_2])
+            table = app.query_one("#alignment-results-table", DataTable)
+
+            row_keys = list(table.rows.keys())
+            assert len(row_keys) == 2
+
+            # Row 0 — REC-001
+            row0 = [
+                str(table.get_cell(row_keys[0], col_key))
+                for col_key in table.columns
+            ]
+            assert "REC-001" in row0
+            assert "100" in row0   # start
+            assert "123" in row0   # end
+
+            # Row 1 — REC-002
+            row1 = [
+                str(table.get_cell(row_keys[1], col_key))
+                for col_key in table.columns
+            ]
+            assert "REC-002" in row1
+            assert "500" in row1
+            assert "523" in row1
+    _run(_inner())
+
+
+def test_correct_mismatch_counts() -> None:
+    """Verify mismatch_count values are stored correctly in the table."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.update_alignment_results([_SAMPLE_RESULT_1, _SAMPLE_RESULT_2])
+            table = app.query_one("#alignment-results-table", DataTable)
+
+            row_keys = list(table.rows.keys())
+            row0_vals = [
+                str(table.get_cell(row_keys[0], col_key))
+                for col_key in table.columns
+            ]
+            row1_vals = [
+                str(table.get_cell(row_keys[1], col_key))
+                for col_key in table.columns
+            ]
+            assert "0" in row0_vals    # REC-001: 0 mismatches
+            assert "2" in row1_vals    # REC-002: 2 mismatches
+    _run(_inner())
+
+
+def test_updating_results_clears_previous_rows() -> None:
+    """Verify calling update_alignment_results replaces, not appends, existing rows."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            # First load: 3 rows
+            app.update_alignment_results(
+                [_SAMPLE_RESULT_1, _SAMPLE_RESULT_2, _SAMPLE_RESULT_3]
+            )
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 3
+
+            # Second load: 1 row — must replace, not append
+            app.update_alignment_results([_SAMPLE_RESULT_2])
+            assert table.row_count == 1
+    _run(_inner())
+
+
+def test_empty_results_list_leaves_table_empty() -> None:
+    """Verify passing an empty list clears the table."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            # Pre-populate, then clear with []
+            app.update_alignment_results([_SAMPLE_RESULT_1, _SAMPLE_RESULT_2])
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 2
+
+            app.update_alignment_results([])
+            assert table.row_count == 0
+    _run(_inner())
+
+
+def test_missing_required_field_raises_value_error() -> None:
+    """Verify a result dict missing a required field raises ValueError clearly."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            bad_result = {
+                "record_id": "REC-BAD",
+                "start": 10,
+                # "end" is intentionally missing
+                "matched_sequence": "ACGT",
+                "mismatch_count": 0,
+                "mismatch_positions": [],
+            }
+            with pytest.raises(ValueError, match="end"):
+                app.update_alignment_results([bad_result])
+    _run(_inner())
+
+
+def test_missing_multiple_fields_raises_value_error() -> None:
+    """Verify a result dict missing multiple required fields raises ValueError."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            very_bad = {"record_id": "REC-EMPTY"}
+            with pytest.raises(ValueError):
+                app.update_alignment_results([very_bad])
+    _run(_inner())
+
+
+def test_mismatch_positions_not_a_column() -> None:
+    """Verify mismatch_positions is accepted as input but is NOT a table column."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            table = app.query_one("#alignment-results-table", DataTable)
+            col_labels = {str(col.label) for col in table.columns.values()}
+            assert "Mismatch Positions" not in col_labels
+            assert "mismatch_positions" not in col_labels
+
+            # Field must be accepted without error
+            app.update_alignment_results([_SAMPLE_RESULT_2])
+            assert table.row_count == 1
+    _run(_inner())
+
+
+def test_scan_status_and_progress_still_work_after_day4_changes() -> None:
+    """Verify Day 3 dynamic update methods still function alongside Day 4 additions."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.update_scan_status("Scanning")
+            assert app.scan_status == "Scanning"
+
+            app.update_scan_progress(42)
+            assert app.scan_progress == 42
+
+            # Confirm no conflicts with the results table
+            app.update_alignment_results([_SAMPLE_RESULT_1])
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 1
+    _run(_inner())

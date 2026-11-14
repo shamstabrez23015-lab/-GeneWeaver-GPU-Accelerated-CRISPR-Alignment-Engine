@@ -1,11 +1,12 @@
 """
 GeneWeaver: GPU-Accelerated CRISPR Alignment Engine
-Terminal Dashboard (Day 3)
+Terminal Dashboard (Day 4)
 
 A clean, modular terminal interface built with Textual with a structured
 layout including a Header, Sidebar (system and engine status), Main Content
 area (processing info, progress bar at 0%, mismatch counts, alignment results),
-and Footer. Provides dynamic update capabilities for scan status and progress.
+and Footer. Provides dynamic update capabilities for scan status, progress,
+and an alignment results DataTable.
 """
 
 from __future__ import annotations
@@ -13,7 +14,12 @@ from __future__ import annotations
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Footer, Header, Label, ProgressBar
+from textual.widgets import DataTable, Footer, Header, Label, ProgressBar
+
+# Required fields for update_alignment_results
+_REQUIRED_RESULT_FIELDS = frozenset(
+    {"record_id", "start", "end", "matched_sequence", "mismatch_count"}
+)
 
 
 class ProjectStatusPanel(Container):
@@ -78,6 +84,15 @@ class ProcessingInfoPanel(Container):
 class ResultsPanel(Container):
     """Main content panel displaying mismatch summary and alignment results."""
 
+    # Column definitions: (label, width) — widths tuned for a normal 80-col terminal
+    _COLUMNS: list[tuple[str, int]] = [
+        ("Record ID", 14),
+        ("Start Position", 16),
+        ("End Position", 14),
+        ("Matched Sequence", 20),
+        ("Mismatch Count", 15),
+    ]
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.border_title = "Alignment Results"
@@ -86,6 +101,13 @@ class ResultsPanel(Container):
         yield Label("[b]Mismatch counts:[/b] None recorded", id="status-mismatch-counts", classes="stat-line")
         yield Label("[b]Alignment results:[/b] No results available", id="status-alignment-results", classes="stat-line")
         yield Label("Detailed alignment matches will appear here once scanning begins.", id="results-placeholder", classes="results-empty")
+        yield DataTable(id="alignment-results-table", show_cursor=False)
+
+    def on_mount(self) -> None:
+        """Add columns to the DataTable once the app context is live."""
+        table: DataTable = self.query_one("#alignment-results-table", DataTable)
+        for label, width in self._COLUMNS:
+            table.add_column(label, width=width)
 
 
 class GeneWeaverApp(App):
@@ -180,6 +202,12 @@ class GeneWeaverApp(App):
         color: $text-muted;
         margin-top: 1;
     }
+
+    #alignment-results-table {
+        width: 100%;
+        height: 1fr;
+        margin-top: 1;
+    }
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -272,6 +300,49 @@ class GeneWeaverApp(App):
             widget.update(f"[b]Scan status:[/b] {status}")
         except Exception:
             pass
+
+    def update_alignment_results(self, results: list[dict]) -> None:
+        """Populate the alignment results table from a list of flattened result dicts.
+
+        Each dict must contain these keys:
+            - record_id         : identifier for the genomic record
+            - start             : genomic start position (int)
+            - end               : genomic end position (int)
+            - matched_sequence  : the matched DNA sequence string
+            - mismatch_count    : number of mismatches (int)
+            - mismatch_positions: (accepted but not displayed as a column today)
+
+        Args:
+            results: list of result dicts.  An empty list clears the table.
+
+        Raises:
+            ValueError: if any dict is missing a required field.
+        """
+        # Locate the DataTable widget — may live inside ResultsPanel
+        try:
+            table: DataTable = super().query_one("#alignment-results-table", DataTable)
+        except Exception:
+            table = self.results_panel.query_one("#alignment-results-table", DataTable)
+
+        # Validate all rows up-front before touching the table
+        for idx, row in enumerate(results):
+            missing = _REQUIRED_RESULT_FIELDS - row.keys()
+            if missing:
+                raise ValueError(
+                    f"Result at index {idx} is missing required fields: "
+                    f"{', '.join(sorted(missing))}"
+                )
+
+        # Clear previous rows, then insert new ones
+        table.clear()
+        for row in results:
+            table.add_row(
+                str(row["record_id"]),
+                str(row["start"]),
+                str(row["end"]),
+                str(row["matched_sequence"]),
+                str(row["mismatch_count"]),
+            )
 
     def update_scan_progress(self, progress: int) -> None:
         """Update the scan progress component.
