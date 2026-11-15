@@ -11,6 +11,8 @@ from textual.containers import Container
 from textual.widgets import DataTable, Footer, Header, Label, ProgressBar
 
 from src.dashboard import (
+    DEMO_ALIGNMENT_RESULTS,
+    DEMO_LABEL_TEXT,
     GeneWeaverApp,
     ProcessingInfoPanel,
     ProjectStatusPanel,
@@ -673,4 +675,181 @@ def test_scan_status_and_progress_still_work_after_day4_changes() -> None:
             app.update_alignment_results([_SAMPLE_RESULT_1])
             table = app.query_one("#alignment-results-table", DataTable)
             assert table.row_count == 1
+    _run(_inner())
+
+
+# =============================================================================
+# Day 5 Tests: Dashboard Sample Alignment Results Integration
+# =============================================================================
+
+
+def test_load_demo_results_method_exists() -> None:
+    """Verify GeneWeaverApp provides load_demo_results as a callable."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "load_demo_results")
+    assert callable(app.load_demo_results)
+
+
+def test_dashboard_initially_has_no_alignment_results() -> None:
+    """Verify dashboard initially starts in an empty state with no results."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 0
+            assert app.scan_status == "Not started"
+            assert app.scan_progress == 0
+            assert app.is_demo_mode is False
+
+            demo_label = app.query_one("#demo-data-label", Label)
+            assert demo_label.display is False
+            assert DEMO_LABEL_TEXT not in str(demo_label.render())
+    _run(_inner())
+
+
+def test_calling_load_demo_results_updates_status() -> None:
+    """Verify calling load_demo_results updates scan status to Completed."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+            assert app.scan_status == "Completed"
+            status_widget = app.query_one("#scan-status", Label)
+            assert "Completed" in str(status_widget.render())
+    _run(_inner())
+
+
+def test_calling_load_demo_results_progress_becomes_100() -> None:
+    """Verify calling load_demo_results sets progress to 100%."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+            assert app.scan_progress == 100
+            pb = app.query_one("#alignment-progress", ProgressBar)
+            assert pb.progress == 100
+            lbl = app.query_one("#label-progress", Label)
+            assert "100%" in str(lbl.render())
+    _run(_inner())
+
+
+def test_sample_results_appear_in_table() -> None:
+    """Verify sample alignment records appear properly formatted in DataTable."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == len(DEMO_ALIGNMENT_RESULTS)
+            assert table.row_count > 0
+
+            row_keys = list(table.rows.keys())
+            for idx, expected_record in enumerate(DEMO_ALIGNMENT_RESULTS):
+                row_vals = [
+                    str(table.get_cell(row_keys[idx], col_key))
+                    for col_key in table.columns
+                ]
+                assert str(expected_record["record_id"]) in row_vals
+                assert str(expected_record["start"]) in row_vals
+                assert str(expected_record["end"]) in row_vals
+                assert str(expected_record["matched_sequence"]) in row_vals
+                assert str(expected_record["mismatch_count"]) in row_vals
+    _run(_inner())
+
+
+def test_demo_label_is_visible() -> None:
+    """Verify that the demo disclaimer label is clearly visible after loading demo results."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            demo_label = app.query_one("#demo-data-label", Label)
+            assert demo_label.display is False
+
+            app.load_demo_results()
+
+            assert demo_label.display is True
+            assert DEMO_LABEL_TEXT in str(demo_label.render())
+            assert "DEMO DATA — sample only; no real genome scan performed" in str(demo_label.render())
+            assert app.is_demo_mode is True
+    _run(_inner())
+
+
+def test_calling_load_demo_results_again_does_not_duplicate_rows() -> None:
+    """Verify calling load_demo_results repeatedly clears old rows and prevents duplication."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+            table = app.query_one("#alignment-results-table", DataTable)
+            initial_count = table.row_count
+            assert initial_count == len(DEMO_ALIGNMENT_RESULTS)
+
+            # Second call
+            app.load_demo_results()
+            assert table.row_count == initial_count
+
+            # Third call
+            app.load_demo_results()
+            assert table.row_count == initial_count
+    _run(_inner())
+
+
+def test_sample_data_format_and_required_fields() -> None:
+    """Verify sample records follow the required alignment results format."""
+    required_keys = {
+        "record_id",
+        "start",
+        "end",
+        "matched_sequence",
+        "mismatch_count",
+        "mismatch_positions",
+    }
+    assert len(DEMO_ALIGNMENT_RESULTS) >= 3, "Should provide a small illustrative batch of records"
+    for record in DEMO_ALIGNMENT_RESULTS:
+        assert required_keys.issubset(record.keys())
+        assert isinstance(record["record_id"], str)
+        assert isinstance(record["start"], int)
+        assert isinstance(record["end"], int)
+        assert record["start"] < record["end"]
+        assert isinstance(record["matched_sequence"], str)
+        assert len(record["matched_sequence"]) > 0
+        assert isinstance(record["mismatch_count"], int)
+        assert record["mismatch_count"] >= 0
+        assert isinstance(record["mismatch_positions"], list)
+        assert len(record["mismatch_positions"]) == record["mismatch_count"]
+
+
+def test_demo_results_do_not_fabricate_gpu_metrics() -> None:
+    """Verify demo results do not display fabricated GPU or hardware metrics."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+
+            cpu_label = app.query_one("#status-cpu-engine", Label)
+            assert "Not started" in str(cpu_label.render())
+
+            gpu_engine_label = app.query_one("#status-gpu-engine", Label)
+            assert "Not connected" in str(gpu_engine_label.render())
+
+            gpu_mem_label = app.query_one("#status-gpu-memory", Label)
+            assert "Not available yet" in str(gpu_mem_label.render())
+
+            seq_scanned = app.query_one("#status-sequences-scanned", Label)
+            assert "0" in str(seq_scanned.render())
+    _run(_inner())
+
+
+def test_demo_label_widget_accessors_and_aliases() -> None:
+    """Verify demo label can be accessed via property and alias selectors."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+
+            lbl_data = app.query_one("#demo-data-label", Label)
+            lbl_alias = app.query_one("#demo-label", Label)
+            assert lbl_data is lbl_alias
+            assert app.demo_label is lbl_data
+            assert app.demo_mode is True
     _run(_inner())

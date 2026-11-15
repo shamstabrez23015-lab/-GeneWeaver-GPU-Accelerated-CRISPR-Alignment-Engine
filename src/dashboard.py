@@ -21,6 +21,45 @@ _REQUIRED_RESULT_FIELDS = frozenset(
     {"record_id", "start", "end", "matched_sequence", "mismatch_count"}
 )
 
+# Demo label disclaimer
+DEMO_LABEL_TEXT: str = "DEMO DATA — sample only; no real genome scan performed"
+
+# Sample alignment results for demo purposes
+DEMO_ALIGNMENT_RESULTS: list[dict] = [
+    {
+        "record_id": "DEMO-SITE-001",
+        "start": 10500,
+        "end": 10523,
+        "matched_sequence": "GAGTCCGAGCAGAAGAAGAATGG",
+        "mismatch_count": 0,
+        "mismatch_positions": [],
+    },
+    {
+        "record_id": "DEMO-SITE-002",
+        "start": 42100,
+        "end": 42123,
+        "matched_sequence": "GAGTCCGATCAGAAGAAGAATGG",
+        "mismatch_count": 1,
+        "mismatch_positions": [8],
+    },
+    {
+        "record_id": "DEMO-SITE-003",
+        "start": 89450,
+        "end": 89473,
+        "matched_sequence": "GAGTCCGATCAGAAGAAGAAGGG",
+        "mismatch_count": 2,
+        "mismatch_positions": [8, 20],
+    },
+    {
+        "record_id": "DEMO-SITE-004",
+        "start": 120300,
+        "end": 120323,
+        "matched_sequence": "GCGTCCGATCAGAAGAAGAAGGG",
+        "mismatch_count": 3,
+        "mismatch_positions": [1, 8, 20],
+    },
+]
+
 
 class ProjectStatusPanel(Container):
     """Sidebar panel displaying project information and engine readiness."""
@@ -96,18 +135,46 @@ class ResultsPanel(Container):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.border_title = "Alignment Results"
+        self.demo_label = Label(
+            "",
+            id="demo-data-label",
+            classes="demo-label demo-data-label",
+        )
+        self.demo_label.display = False
 
     def compose(self) -> ComposeResult:
         yield Label("[b]Mismatch counts:[/b] None recorded", id="status-mismatch-counts", classes="stat-line")
         yield Label("[b]Alignment results:[/b] No results available", id="status-alignment-results", classes="stat-line")
+        yield self.demo_label
         yield Label("Detailed alignment matches will appear here once scanning begins.", id="results-placeholder", classes="results-empty")
         yield DataTable(id="alignment-results-table", show_cursor=False)
 
     def on_mount(self) -> None:
         """Add columns to the DataTable once the app context is live."""
         table: DataTable = self.query_one("#alignment-results-table", DataTable)
-        for label, width in self._COLUMNS:
-            table.add_column(label, width=width)
+        if len(table.columns) == 0:
+            for label, width in self._COLUMNS:
+                table.add_column(label, width=width)
+
+    def set_demo_label_visible(self, visible: bool = True) -> None:
+        """Toggle visibility and text of the demo data label."""
+        if visible:
+            self.demo_label.update(DEMO_LABEL_TEXT)
+            self.demo_label.display = True
+        else:
+            self.demo_label.update("")
+            self.demo_label.display = False
+
+    def query_one(self, selector, *args, **kwargs):
+        """Query for a child widget with alias mapping and fallback."""
+        if selector in ("#demo-label", "#demo-data-label", "#demo-banner", "#status-demo"):
+            selector = "#demo-data-label"
+        try:
+            return super().query_one(selector, *args, **kwargs)
+        except Exception:
+            if selector == "#demo-data-label" and hasattr(self, "demo_label"):
+                return self.demo_label
+            raise
 
 
 class GeneWeaverApp(App):
@@ -203,6 +270,15 @@ class GeneWeaverApp(App):
         margin-top: 1;
     }
 
+    #demo-data-label,
+    #demo-label,
+    .demo-data-label {
+        color: $warning;
+        text-style: bold;
+        margin-top: 1;
+        margin-bottom: 0;
+    }
+
     #alignment-results-table {
         width: 100%;
         height: 1fr;
@@ -214,9 +290,20 @@ class GeneWeaverApp(App):
         super().__init__(*args, **kwargs)
         self.scan_status: str = "Not started"
         self.scan_progress: int = 0
+        self.is_demo_mode: bool = False
         self.project_status_panel = ProjectStatusPanel(id="project-status-panel")
         self.processing_info_panel = ProcessingInfoPanel(id="processing-info-panel")
         self.results_panel = ResultsPanel(id="results-panel")
+
+    @property
+    def demo_label(self) -> Label:
+        """Return the demo data warning label widget."""
+        return self.results_panel.demo_label
+
+    @property
+    def demo_mode(self) -> bool:
+        """Return True if demo results have been loaded."""
+        return self.is_demo_mode
 
     def action_help(self) -> None:
         """Display a brief help notification."""
@@ -248,6 +335,8 @@ class GeneWeaverApp(App):
             selector = "#scan-status"
         elif selector == "#alignment-progress-bar":
             selector = "#alignment-progress"
+        elif selector in ("#demo-label", "#demo-data-label", "#demo-banner", "#status-demo"):
+            selector = "#demo-data-label"
         try:
             return super().query_one(selector, *args, **kwargs)
         except Exception:
@@ -263,6 +352,8 @@ class GeneWeaverApp(App):
                 return self.processing_info_panel
             if selector == "#results-panel" and hasattr(self, "results_panel"):
                 return self.results_panel
+            if selector == "#demo-data-label" and hasattr(self, "results_panel"):
+                return self.results_panel.demo_label
             raise
 
     def query(self, selector=None, *args, **kwargs):
@@ -271,6 +362,8 @@ class GeneWeaverApp(App):
             selector = "#scan-status"
         elif selector == "#alignment-progress-bar":
             selector = "#alignment-progress"
+        elif selector in ("#demo-label", "#demo-data-label", "#demo-banner", "#status-demo"):
+            selector = "#demo-data-label"
         return super().query(selector, *args, **kwargs)
 
     def update_scan_status(self, status: str) -> None:
@@ -324,6 +417,11 @@ class GeneWeaverApp(App):
         except Exception:
             table = self.results_panel.query_one("#alignment-results-table", DataTable)
 
+        # Ensure table columns exist if called before app mount
+        if len(table.columns) == 0 and hasattr(self, "results_panel"):
+            for label, width in self.results_panel._COLUMNS:
+                table.add_column(label, width=width)
+
         # Validate all rows up-front before touching the table
         for idx, row in enumerate(results):
             missing = _REQUIRED_RESULT_FIELDS - row.keys()
@@ -373,6 +471,37 @@ class GeneWeaverApp(App):
         try:
             lbl = super().query_one("#label-progress", Label)
             lbl.update(f"[b]Alignment progress:[/b] {progress}%")
+        except Exception:
+            pass
+
+    def load_demo_results(self, results: list[dict] | None = None) -> None:
+        """Load sample CRISPR alignment results for demonstration.
+
+        Updates scan status to 'Completed', scan progress to 100%,
+        populates the existing alignment results table using illustrative
+        sample data, and displays a clear visible label:
+        'DEMO DATA — sample only; no real genome scan performed'
+
+        Args:
+            results: Optional custom list of sample result dicts.
+                     Defaults to DEMO_ALIGNMENT_RESULTS.
+        """
+        self.is_demo_mode = True
+        demo_data = [
+            dict(r) for r in (results if results is not None else DEMO_ALIGNMENT_RESULTS)
+        ]
+
+        # Use existing update methods wherever possible
+        self.update_scan_status("Completed")
+        self.update_scan_progress(100)
+        self.update_alignment_results(demo_data)
+
+        # Display the demo data disclaimer label
+        self.results_panel.set_demo_label_visible(True)
+        try:
+            lbl = super().query_one("#demo-data-label", Label)
+            lbl.update(DEMO_LABEL_TEXT)
+            lbl.display = True
         except Exception:
             pass
 
