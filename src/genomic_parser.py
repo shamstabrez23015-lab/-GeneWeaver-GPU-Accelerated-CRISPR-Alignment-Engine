@@ -1,7 +1,7 @@
 """
 genomic_parser.py
 -----------------
-Day 1, Day 2, Day 3 & Day 4 – GeneWeaver: Genomic Parser Module
+Day 1, Day 2, Day 3, Day 4 & Day 5 – GeneWeaver: Genomic Parser Module
 
 Provides FASTA file parsing, sequence extraction, DNA sequence cleaning,
 validation, and genomic sequence chunking utilities using BioPython's SeqIO module.
@@ -128,12 +128,12 @@ def parse_fasta(file_path: str) -> list[dict[str, Any]]:
     Returns
     -------
     list[dict[str, Any]]
-        A list of record dictionaries, one per FASTA entry.
+        A list of record dictionaries, one per FASTA entry, preserving record order.
 
     Raises
     ------
     FileNotFoundError
-        If *file_path* does not point to an existing file.
+        If *file_path* does not point to an existing file, is empty, or is not a string.
     ValueError
         If the FASTA file exists but contains no sequence records, or if any
         record contains an invalid or empty DNA sequence.
@@ -147,6 +147,11 @@ def parse_fasta(file_path: str) -> list[dict[str, Any]]:
     'ATGCTTAG'
     """
     # --- file existence check -------------------------------------------------
+    if not isinstance(file_path, str) or not file_path.strip():
+        raise FileNotFoundError(
+            f"FASTA file not found: '{file_path}'"
+        )
+
     if not os.path.isfile(file_path):
         raise FileNotFoundError(
             f"FASTA file not found: '{file_path}'"
@@ -203,8 +208,8 @@ def extract_sequences(records: list[dict[str, Any]]) -> list[str]:
     Raises
     ------
     ValueError
-        If any record in *records* is not a dictionary or does not contain a
-        valid sequence field.
+        If *records* is not a list, or if any record in *records* is not a
+        dictionary or does not contain a valid sequence field.
 
     Examples
     --------
@@ -214,6 +219,11 @@ def extract_sequences(records: list[dict[str, Any]]) -> list[str]:
     >>> extract_sequences([])
     []
     """
+    if not isinstance(records, list):
+        raise ValueError(
+            f"records must be a list, got {type(records).__name__}."
+        )
+
     if not records:
         return []
 
@@ -253,7 +263,8 @@ def get_sequence_by_id(
     KeyError
         If no record with the given *record_id* exists in *records*.
     ValueError
-        If the matching record does not contain a valid sequence field.
+        If *records* is not a list, or if the matching record does not
+        contain a valid sequence field.
 
     Examples
     --------
@@ -261,6 +272,11 @@ def get_sequence_by_id(
     >>> get_sequence_by_id(records, "seq1")
     'ATGC'
     """
+    if not isinstance(records, list):
+        raise ValueError(
+            f"records must be a list, got {type(records).__name__}."
+        )
+
     for record in records:
         if isinstance(record, dict) and record.get("record_id") == record_id:
             if "sequence" not in record:
@@ -282,7 +298,8 @@ def chunk_sequence(
     Parameters
     ----------
     sequence:
-        The cleaned DNA sequence string to partition.
+        The DNA sequence string to partition. If uncleaned, it will be
+        cleaned and validated prior to chunking.
     chunk_size:
         The maximum length of each chunk. Must be a positive integer.
 
@@ -299,16 +316,17 @@ def chunk_sequence(
     Raises
     ------
     ValueError
-        If *chunk_size* is <= 0, or if *sequence* contains invalid DNA characters.
+        If *chunk_size* is not a positive integer (<= 0, non-int), or if
+        *sequence* is not a string or contains invalid DNA characters.
 
     Examples
     --------
     >>> chunk_sequence("ATGCAT", chunk_size=4)
     [{'chunk_index': 0, 'start': 0, 'end': 4, 'sequence': 'ATGC'}, {'chunk_index': 1, 'start': 4, 'end': 6, 'sequence': 'AT'}]
     """
-    if chunk_size <= 0:
+    if not isinstance(chunk_size, int) or isinstance(chunk_size, bool) or chunk_size <= 0:
         raise ValueError(
-            f"chunk_size must be a positive integer, got {chunk_size}."
+            f"chunk_size must be a positive integer, got {chunk_size!r}."
         )
 
     if not isinstance(sequence, str):
@@ -319,10 +337,11 @@ def chunk_sequence(
     if not sequence:
         return []
 
-    validate_dna_sequence(sequence)
+    # Clean and validate sequence (handles uppercase conversion and character checks)
+    cleaned_seq = clean_dna_sequence(sequence)
 
     chunks: list[dict[str, Any]] = []
-    seq_len = len(sequence)
+    seq_len = len(cleaned_seq)
     chunk_index = 0
     for start in range(0, seq_len, chunk_size):
         end = min(start + chunk_size, seq_len)
@@ -331,7 +350,7 @@ def chunk_sequence(
                 "chunk_index": chunk_index,
                 "start": start,
                 "end": end,
-                "sequence": sequence[start:end],
+                "sequence": cleaned_seq[start:end],
             }
         )
         chunk_index += 1
@@ -351,7 +370,7 @@ def chunk_fasta_records(
         A list of FASTA record dictionaries (as returned by :func:`parse_fasta`).
         Each dictionary must contain ``'record_id'`` and ``'sequence'``.
     chunk_size:
-        The maximum number of nucleotides per chunk. Must be positive.
+        The maximum number of nucleotides per chunk. Must be a positive integer.
 
     Returns
     -------
@@ -362,8 +381,9 @@ def chunk_fasta_records(
     Raises
     ------
     ValueError
-        If *chunk_size* is <= 0, or if any record is missing ``'record_id'``
-        or ``'sequence'``, or contains an invalid sequence.
+        If *chunk_size* is not a positive integer, or if *records* is not a
+        list, or if any record is missing ``'record_id'`` or ``'sequence'``,
+        or contains an invalid sequence.
 
     Examples
     --------
@@ -371,9 +391,14 @@ def chunk_fasta_records(
     >>> chunk_fasta_records(recs, chunk_size=2)
     [{'record_id': 'chr1', 'chunks': [{'chunk_index': 0, 'start': 0, 'end': 2, 'sequence': 'AT'}, {'chunk_index': 1, 'start': 2, 'end': 4, 'sequence': 'GC'}]}]
     """
-    if chunk_size <= 0:
+    if not isinstance(chunk_size, int) or isinstance(chunk_size, bool) or chunk_size <= 0:
         raise ValueError(
-            f"chunk_size must be a positive integer, got {chunk_size}."
+            f"chunk_size must be a positive integer, got {chunk_size!r}."
+        )
+
+    if not isinstance(records, list):
+        raise ValueError(
+            f"records must be a list, got {type(records).__name__}."
         )
 
     chunked_records: list[dict[str, Any]] = []
@@ -385,6 +410,10 @@ def chunk_fasta_records(
         if "record_id" not in record or record["record_id"] is None:
             raise ValueError(
                 f"Record is missing required 'record_id' field: {record}"
+            )
+        if not str(record["record_id"]).strip():
+            raise ValueError(
+                f"Record 'record_id' cannot be empty: {record}"
             )
         if "sequence" not in record or record["sequence"] is None:
             raise ValueError(

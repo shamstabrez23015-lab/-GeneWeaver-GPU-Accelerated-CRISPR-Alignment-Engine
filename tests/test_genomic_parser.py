@@ -49,6 +49,20 @@ Day 4:
 32. Preserving record IDs and record order.
 33. Handling records with empty sequences (includes record with empty chunks).
 34. Validating missing record ID and sequence fields.
+
+Day 5:
+35. FASTA parser edge cases (embedded whitespace, multiline breaks, blank lines).
+36. Preserving order across 5+ records in multi-record FASTA files.
+37. Corrupt record in multi-record file properly caught and reported.
+38. Header-only FASTA records rejection.
+39. Missing file path edge cases (empty string, whitespace).
+40. Sequence shorter than chunk size handling.
+41. Sequence exactly equal to chunk size handling.
+42. Sequence longer than chunk size handling.
+43. Sequence not dividing evenly into chunks handling.
+44. Cleaning and uppercasing uncleaned sequence input in chunk_sequence.
+45. Rejection of invalid/non-integer chunk sizes across all chunking functions.
+46. Handling non-list records arguments in helper functions.
 """
 
 from __future__ import annotations
@@ -622,7 +636,7 @@ class TestParseFastaCleaningAndValidation:
 
 
 # ---------------------------------------------------------------------------
-# Day 4 Tests: chunk_sequence and chunk_fasta_records
+# Day 4 Tests: chunk_sequence and chunk_fasta_records (Preserved)
 # ---------------------------------------------------------------------------
 
 
@@ -815,3 +829,192 @@ class TestChunkFastaRecords:
         assert chunked[1]["chunks"][0]["end"] == 5
         assert chunked[1]["chunks"][1]["start"] == 5
         assert chunked[1]["chunks"][1]["end"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Day 5 Tests: FASTA Parser Reliability & Chunking Edge Cases
+# ---------------------------------------------------------------------------
+
+
+class TestFastaParserEdgeCases:
+    """Edge case tests for parse_fasta(file_path)."""
+
+    def test_single_record_with_embedded_spaces_and_multiline_breaks(self, tmp_path):
+        """Single FASTA record with spaces, tabs, and multiline breaks."""
+        content = ">id1 Homo sapiens single\n  A T G C  \n  T T G G  \n\tN N A A\n"
+        path = _write_fasta(tmp_path, "single_edge.fasta", content)
+        records = parse_fasta(path)
+        assert len(records) == 1
+        assert records[0]["record_id"] == "id1"
+        assert records[0]["description"] == "id1 Homo sapiens single"
+        assert records[0]["sequence"] == "ATGCTTGGNNAA"
+
+    def test_multiple_records_order_and_content_preservation(self, tmp_path):
+        """Five FASTA records must preserve exact ID, description, and sequence order."""
+        content = (
+            ">rec_0 First\nAAAA\n"
+            ">rec_1 Second\nCCCC\n"
+            ">rec_2 Third\nGGGG\n"
+            ">rec_3 Fourth\nTTTT\n"
+            ">rec_4 Fifth\nNNNN\n"
+        )
+        path = _write_fasta(tmp_path, "five_records.fasta", content)
+        records = parse_fasta(path)
+        assert len(records) == 5
+        for i, expected_seq in enumerate(["AAAA", "CCCC", "GGGG", "TTTT", "NNNN"]):
+            assert records[i]["record_id"] == f"rec_{i}"
+            assert records[i]["sequence"] == expected_seq
+
+    def test_corrupt_record_in_multi_record_file_raises_value_error(self, tmp_path):
+        """A corrupt sequence in any record of a multi-record file must raise ValueError."""
+        content = (
+            ">rec1 valid\nACGT\n"
+            ">rec2 corrupt\nACGTXZNN\n"
+            ">rec3 valid\nACGT\n"
+        )
+        path = _write_fasta(tmp_path, "corrupt_multi.fasta", content)
+        with pytest.raises(ValueError, match="rec2|Unsupported"):
+            parse_fasta(path)
+
+    def test_header_only_fasta_record_raises_value_error(self, tmp_path):
+        """FASTA file with a header but no sequence lines must raise ValueError."""
+        content = ">header_only\n"
+        path = _write_fasta(tmp_path, "no_seq.fasta", content)
+        with pytest.raises(ValueError, match="empty"):
+            parse_fasta(path)
+
+    def test_empty_string_file_path_raises_file_not_found(self):
+        """Empty string file path raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            parse_fasta("")
+
+    def test_whitespace_file_path_raises_file_not_found(self):
+        """Whitespace-only file path raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            parse_fasta("   \t  ")
+
+
+class TestChunkingEdgeCases:
+    """Edge case tests for chunk_sequence and chunk_fasta_records."""
+
+    def test_sequence_shorter_than_chunk_size(self):
+        """Sequence shorter than chunk size returns a single chunk spanning the full sequence."""
+        seq = "ACGT"
+        chunks = chunk_sequence(seq, chunk_size=100)
+        assert len(chunks) == 1
+        assert chunks[0]["chunk_index"] == 0
+        assert chunks[0]["start"] == 0
+        assert chunks[0]["end"] == 4
+        assert chunks[0]["sequence"] == "ACGT"
+
+    def test_sequence_exactly_equal_to_chunk_size(self):
+        """Sequence length exactly equal to chunk size returns one full chunk."""
+        seq = "ACGTACGT"
+        chunks = chunk_sequence(seq, chunk_size=8)
+        assert len(chunks) == 1
+        assert chunks[0]["chunk_index"] == 0
+        assert chunks[0]["start"] == 0
+        assert chunks[0]["end"] == 8
+        assert chunks[0]["sequence"] == "ACGTACGT"
+
+    def test_sequence_longer_than_chunk_size(self):
+        """Sequence longer than chunk size divides into multiple chunks."""
+        seq = "ACGTACGTACGT"  # 12 bp
+        chunks = chunk_sequence(seq, chunk_size=4)
+        assert len(chunks) == 3
+        assert [c["sequence"] for c in chunks] == ["ACGT", "ACGT", "ACGT"]
+        assert [c["start"] for c in chunks] == [0, 4, 8]
+        assert [c["end"] for c in chunks] == [4, 8, 12]
+
+    def test_sequence_not_dividing_evenly_into_chunks(self):
+        """Sequence that does not divide evenly ends with a smaller final chunk."""
+        seq = "ACGTACGTN"  # 9 bp
+        chunks = chunk_sequence(seq, chunk_size=4)
+        assert len(chunks) == 3
+        assert len(chunks[0]["sequence"]) == 4
+        assert len(chunks[1]["sequence"]) == 4
+        assert len(chunks[2]["sequence"]) == 1
+        assert chunks[2]["sequence"] == "N"
+        assert chunks[2]["start"] == 8
+        assert chunks[2]["end"] == 9
+
+    def test_chunk_sequence_cleans_uncleaned_input(self):
+        """chunk_sequence cleans whitespace and uppercases lowercase input."""
+        seq = "  a c g t  \n  a c g t  "
+        chunks = chunk_sequence(seq, chunk_size=4)
+        assert len(chunks) == 2
+        assert chunks[0]["sequence"] == "ACGT"
+        assert chunks[1]["sequence"] == "ACGT"
+        assert "".join(c["sequence"] for c in chunks) == "ACGTACGT"
+
+    def test_chunk_sequence_rejects_non_integer_chunk_sizes(self):
+        """Non-integer chunk sizes (float, string, None, bool) must raise ValueError."""
+        for invalid_size in [3.5, "10", None, True, False]:
+            with pytest.raises(ValueError, match="positive integer"):
+                chunk_sequence("ACGT", chunk_size=invalid_size)  # type: ignore[arg-type]
+
+    def test_chunk_sequence_rejects_non_string_sequence(self):
+        """Non-string sequence input must raise ValueError."""
+        with pytest.raises(ValueError, match="must be a string"):
+            chunk_sequence(12345, chunk_size=10)  # type: ignore[arg-type]
+
+    def test_chunk_fasta_records_shorter_than_chunk_size(self):
+        """Record with sequence shorter than chunk size produces single chunk."""
+        records = [{"record_id": "short_chr", "sequence": "ACGT"}]
+        result = chunk_fasta_records(records, chunk_size=50)
+        assert len(result) == 1
+        assert len(result[0]["chunks"]) == 1
+        assert result[0]["chunks"][0]["start"] == 0
+        assert result[0]["chunks"][0]["end"] == 4
+        assert result[0]["chunks"][0]["sequence"] == "ACGT"
+
+    def test_chunk_fasta_records_equal_to_chunk_size(self):
+        """Record with sequence exactly equal to chunk size produces one chunk."""
+        records = [{"record_id": "exact_chr", "sequence": "ACGTACGT"}]
+        result = chunk_fasta_records(records, chunk_size=8)
+        assert len(result[0]["chunks"]) == 1
+        assert result[0]["chunks"][0]["start"] == 0
+        assert result[0]["chunks"][0]["end"] == 8
+        assert result[0]["chunks"][0]["sequence"] == "ACGTACGT"
+
+    def test_chunk_fasta_records_uneven_division(self):
+        """Record with sequence not dividing evenly produces smaller final chunk."""
+        records = [{"record_id": "uneven_chr", "sequence": "ACGTACGTNN"}]  # 10 bp
+        result = chunk_fasta_records(records, chunk_size=4)
+        assert len(result[0]["chunks"]) == 3
+        assert result[0]["chunks"][2]["sequence"] == "NN"
+        assert result[0]["chunks"][2]["start"] == 8
+        assert result[0]["chunks"][2]["end"] == 10
+
+    def test_chunk_fasta_records_with_empty_id_raises_value_error(self):
+        """Record with empty or whitespace-only record_id must raise ValueError."""
+        with pytest.raises(ValueError, match="record_id"):
+            chunk_fasta_records([{"record_id": "", "sequence": "ACGT"}], chunk_size=10)
+        with pytest.raises(ValueError, match="record_id"):
+            chunk_fasta_records([{"record_id": "   ", "sequence": "ACGT"}], chunk_size=10)
+
+    def test_chunk_fasta_records_rejects_non_integer_chunk_sizes(self):
+        """chunk_fasta_records rejects non-integer chunk sizes."""
+        records = [{"record_id": "chr1", "sequence": "ACGT"}]
+        for invalid_size in [2.5, "4", None, True]:
+            with pytest.raises(ValueError, match="positive integer"):
+                chunk_fasta_records(records, chunk_size=invalid_size)  # type: ignore[arg-type]
+
+    def test_chunk_fasta_records_rejects_non_list_records(self):
+        """Non-list records argument must raise ValueError."""
+        with pytest.raises(ValueError, match="must be a list"):
+            chunk_fasta_records("not a list", chunk_size=10)  # type: ignore[arg-type]
+
+    def test_chunk_fasta_records_empty_list_returns_empty_list(self):
+        """Empty records list returns empty list."""
+        assert chunk_fasta_records([], chunk_size=10) == []
+
+    def test_extract_sequences_rejects_non_list_input(self):
+        """extract_sequences raises ValueError when input is not a list."""
+        with pytest.raises(ValueError, match="must be a list"):
+            extract_sequences("not a list")  # type: ignore[arg-type]
+
+    def test_get_sequence_by_id_rejects_non_list_input(self):
+        """get_sequence_by_id raises ValueError when records is not a list."""
+        with pytest.raises(ValueError, match="must be a list"):
+            get_sequence_by_id("not a list", "id1")  # type: ignore[arg-type]
