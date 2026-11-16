@@ -2,4 +2,5 @@ biopython
 numpy
 pytest
 textual
-
+numba
+numba-cuda
