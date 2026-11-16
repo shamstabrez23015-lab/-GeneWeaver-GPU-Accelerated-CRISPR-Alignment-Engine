@@ -88,6 +88,55 @@ class ProjectStatusPanel(Container):
         self.scan_status_widget.update(f"[b]Scan status:[/b] {status}")
 
 
+class GpuStatusPanel(Container):
+    """Sidebar panel displaying GPU accelerator status and device information."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.border_title = "GPU Status"
+        self._gpu_status: str = "Not checked"
+        self._gpu_device: str = "Not detected"
+        self.gpu_status_widget = Label(
+            f"[b]GPU Status:[/b] {self._gpu_status}",
+            id="gpu-status",
+            classes="stat-line",
+        )
+        self.gpu_device_widget = Label(
+            f"[b]GPU Device:[/b] {self._gpu_device}",
+            id="gpu-device",
+            classes="stat-line",
+        )
+        self.status_widget = self.gpu_status_widget
+        self.device_widget = self.gpu_device_widget
+
+    def compose(self) -> ComposeResult:
+        yield self.gpu_status_widget
+        yield self.gpu_device_widget
+
+    def update_status(self, status: str, device_name: str | None = None) -> None:
+        """Update GPU status and device name label displays."""
+        self._gpu_status = status
+        self.gpu_status_widget.update(f"[b]GPU Status:[/b] {status}")
+        if device_name is not None:
+            self._gpu_device = device_name
+            self.gpu_device_widget.update(f"[b]GPU Device:[/b] {device_name}")
+
+    def update_gpu_status(self, status: str, device_name: str | None = None) -> None:
+        """Alias for update_status."""
+        self.update_status(status, device_name)
+
+    def query_one(self, selector, *args, **kwargs):
+        """Query for a child widget with fallback for unmounted tests."""
+        try:
+            return super().query_one(selector, *args, **kwargs)
+        except Exception:
+            if selector == "#gpu-status" and hasattr(self, "gpu_status_widget"):
+                return self.gpu_status_widget
+            if selector == "#gpu-device" and hasattr(self, "gpu_device_widget"):
+                return self.gpu_device_widget
+            raise
+
+
 class ProcessingInfoPanel(Container):
     """Main content panel displaying genome processing and alignment progress."""
 
@@ -197,6 +246,14 @@ class GeneWeaverApp(App):
         "Failed",
     }
 
+    SUPPORTED_GPU_STATUSES = {
+        "Not checked",
+        "Checking",
+        "Available",
+        "Unavailable",
+        "Error",
+    }
+
     CSS = """
     Screen {
         background: $surface;
@@ -229,9 +286,19 @@ class GeneWeaverApp(App):
 
     ProjectStatusPanel {
         width: 100%;
-        height: 100%;
+        height: auto;
         min-height: 10;
         border: round $primary;
+        background: $panel;
+        padding: 1 1;
+        margin-bottom: 1;
+    }
+
+    GpuStatusPanel {
+        width: 100%;
+        height: auto;
+        min-height: 5;
+        border: round $success;
         background: $panel;
         padding: 1 1;
     }
@@ -292,6 +359,7 @@ class GeneWeaverApp(App):
         self.scan_progress: int = 0
         self.is_demo_mode: bool = False
         self.project_status_panel = ProjectStatusPanel(id="project-status-panel")
+        self.gpu_status_panel = GpuStatusPanel(id="gpu-status-panel")
         self.processing_info_panel = ProcessingInfoPanel(id="processing-info-panel")
         self.results_panel = ResultsPanel(id="results-panel")
 
@@ -318,6 +386,7 @@ class GeneWeaverApp(App):
         yield Container(
             Container(
                 self.project_status_panel,
+                self.gpu_status_panel,
                 id="sidebar",
             ),
             Container(
@@ -354,6 +423,12 @@ class GeneWeaverApp(App):
                 return self.results_panel
             if selector == "#demo-data-label" and hasattr(self, "results_panel"):
                 return self.results_panel.demo_label
+            if selector == "#gpu-status-panel" and hasattr(self, "gpu_status_panel"):
+                return self.gpu_status_panel
+            if selector == "#gpu-status" and hasattr(self, "gpu_status_panel"):
+                return self.gpu_status_panel.gpu_status_widget
+            if selector == "#gpu-device" and hasattr(self, "gpu_status_panel"):
+                return self.gpu_status_panel.gpu_device_widget
             raise
 
     def query(self, selector=None, *args, **kwargs):
@@ -365,6 +440,61 @@ class GeneWeaverApp(App):
         elif selector in ("#demo-label", "#demo-data-label", "#demo-banner", "#status-demo"):
             selector = "#demo-data-label"
         return super().query(selector, *args, **kwargs)
+
+    def update_gpu_status(self, status: str, device_name: str | None = None) -> None:
+        """Update the GPU status and device name displayed in the GPU Status panel.
+
+        Accepts only supported statuses:
+        - Not checked
+        - Checking
+        - Available   (requires a non-empty device_name)
+        - Unavailable
+        - Error
+
+        Args:
+            status:      One of the supported GPU status strings.
+            device_name: The detected GPU device name. Required when status is
+                         'Available'. Ignored (and cleared) when status is
+                         'Unavailable' or 'Error'. Optional otherwise.
+
+        Raises:
+            ValueError: If status is unsupported.
+            ValueError: If status is 'Available' but device_name is None or empty.
+        """
+        if not isinstance(status, str) or status not in self.SUPPORTED_GPU_STATUSES:
+            raise ValueError(
+                f"Unsupported GPU status: {status!r}. "
+                f"Supported statuses: {', '.join(sorted(self.SUPPORTED_GPU_STATUSES))}"
+            )
+
+        if status == "Available":
+            if not device_name:
+                raise ValueError(
+                    "device_name must be provided and non-empty when status is 'Available'."
+                )
+
+        # Determine the device string to display
+        if status in ("Unavailable", "Error"):
+            display_device = "Not detected"
+        elif device_name is not None:
+            display_device = device_name
+        else:
+            display_device = None  # keep existing device label unchanged
+
+        self.gpu_status_panel.update_status(status, display_device)
+
+        try:
+            status_widget = super().query_one("#gpu-status", Label)
+            status_widget.update(f"[b]GPU Status:[/b] {status}")
+        except Exception:
+            pass
+
+        if display_device is not None:
+            try:
+                device_widget = super().query_one("#gpu-device", Label)
+                device_widget.update(f"[b]GPU Device:[/b] {display_device}")
+            except Exception:
+                pass
 
     def update_scan_status(self, status: str) -> None:
         """Update the scan status component.

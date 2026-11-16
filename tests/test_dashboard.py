@@ -1,5 +1,5 @@
 """
-Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, Day 3, and Day 4).
+Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, Day 3, Day 4, Day 5, and Day 6).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from src.dashboard import (
     DEMO_ALIGNMENT_RESULTS,
     DEMO_LABEL_TEXT,
     GeneWeaverApp,
+    GpuStatusPanel,
     ProcessingInfoPanel,
     ProjectStatusPanel,
     ResultsPanel,
@@ -852,4 +853,269 @@ def test_demo_label_widget_accessors_and_aliases() -> None:
             assert lbl_data is lbl_alias
             assert app.demo_label is lbl_data
             assert app.demo_mode is True
+    _run(_inner())
+
+
+# =============================================================================
+# Day 6 Tests: GPU Status Dashboard Integration
+# =============================================================================
+
+
+def test_gpu_status_panel_can_be_instantiated() -> None:
+    """Verify GpuStatusPanel can be instantiated independently."""
+    panel = GpuStatusPanel()
+    assert panel is not None
+    assert panel.border_title == "GPU Status"
+
+
+def test_gpu_status_panel_initial_status() -> None:
+    """Verify GPU status widget initially reads 'Not checked'."""
+    panel = GpuStatusPanel()
+    assert "Not checked" in str(panel.gpu_status_widget.render())
+
+
+def test_gpu_status_panel_initial_device() -> None:
+    """Verify GPU device widget initially reads 'Not detected'."""
+    panel = GpuStatusPanel()
+    assert "Not detected" in str(panel.gpu_device_widget.render())
+
+
+def test_gpu_status_panel_compose_has_stable_ids() -> None:
+    """Verify GpuStatusPanel yields widgets with stable IDs gpu-status and gpu-device."""
+    panel = GpuStatusPanel()
+    composed = {w.id: w for w in panel.compose() if getattr(w, "id", None)}
+    assert "gpu-status" in composed, "gpu-status widget must be present"
+    assert "gpu-device" in composed, "gpu-device widget must be present"
+
+
+def test_app_has_gpu_status_panel() -> None:
+    """Verify GeneWeaverApp creates a GpuStatusPanel instance."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "gpu_status_panel")
+    assert isinstance(app.gpu_status_panel, GpuStatusPanel)
+
+
+def test_app_initial_gpu_status_is_not_checked() -> None:
+    """Verify app-level GPU status widget initially shows 'Not checked'."""
+    app = GeneWeaverApp()
+    widget = app.query_one("#gpu-status")
+    assert "Not checked" in str(widget.render())
+
+
+def test_app_initial_gpu_device_is_not_detected() -> None:
+    """Verify app-level GPU device widget initially shows 'Not detected'."""
+    app = GeneWeaverApp()
+    widget = app.query_one("#gpu-device")
+    assert "Not detected" in str(widget.render())
+
+
+def test_update_gpu_status_method_exists() -> None:
+    """Verify GeneWeaverApp exposes update_gpu_status as a callable."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "update_gpu_status")
+    assert callable(app.update_gpu_status)
+
+
+def test_update_gpu_status_to_checking() -> None:
+    """Verify updating GPU status to 'Checking' is reflected in the widget."""
+    app = GeneWeaverApp()
+    app.update_gpu_status("Checking")
+    widget = app.query_one("#gpu-status")
+    assert "Checking" in str(widget.render())
+
+
+def test_update_gpu_status_to_available_with_device() -> None:
+    """Verify updating to 'Available' shows the device name."""
+    app = GeneWeaverApp()
+    app.update_gpu_status("Available", device_name="NVIDIA GeForce RTX 3080")
+    status_widget = app.query_one("#gpu-status")
+    device_widget = app.query_one("#gpu-device")
+    assert "Available" in str(status_widget.render())
+    assert "NVIDIA GeForce RTX 3080" in str(device_widget.render())
+
+
+def test_update_gpu_status_to_unavailable() -> None:
+    """Verify updating to 'Unavailable' sets status and shows 'Not detected' for device."""
+    app = GeneWeaverApp()
+    # First set a device name
+    app.update_gpu_status("Available", device_name="NVIDIA GeForce RTX 3080")
+    # Then go Unavailable — device should clear
+    app.update_gpu_status("Unavailable")
+    status_widget = app.query_one("#gpu-status")
+    device_widget = app.query_one("#gpu-device")
+    assert "Unavailable" in str(status_widget.render())
+    assert "Not detected" in str(device_widget.render())
+    assert "NVIDIA GeForce RTX 3080" not in str(device_widget.render())
+
+
+def test_update_gpu_status_to_error() -> None:
+    """Verify updating to 'Error' sets status and shows 'Not detected' for device."""
+    app = GeneWeaverApp()
+    app.update_gpu_status("Available", device_name="NVIDIA GeForce RTX 3080")
+    app.update_gpu_status("Error")
+    status_widget = app.query_one("#gpu-status")
+    device_widget = app.query_one("#gpu-device")
+    assert "Error" in str(status_widget.render())
+    assert "Not detected" in str(device_widget.render())
+    assert "NVIDIA GeForce RTX 3080" not in str(device_widget.render())
+
+
+def test_update_gpu_status_clears_old_device_on_unavailable() -> None:
+    """Verify old device name is cleared when switching to Unavailable."""
+    app = GeneWeaverApp()
+    app.update_gpu_status("Available", device_name="AMD Radeon RX 7900 XTX")
+    device_widget = app.query_one("#gpu-device")
+    assert "AMD Radeon RX 7900 XTX" in str(device_widget.render())
+
+    app.update_gpu_status("Unavailable")
+    assert "AMD Radeon RX 7900 XTX" not in str(device_widget.render())
+    assert "Not detected" in str(device_widget.render())
+
+
+def test_update_gpu_status_clears_old_device_on_error() -> None:
+    """Verify old device name is cleared when switching to Error."""
+    app = GeneWeaverApp()
+    app.update_gpu_status("Available", device_name="AMD Radeon RX 7900 XTX")
+    app.update_gpu_status("Error")
+    device_widget = app.query_one("#gpu-device")
+    assert "AMD Radeon RX 7900 XTX" not in str(device_widget.render())
+    assert "Not detected" in str(device_widget.render())
+
+
+@pytest.mark.parametrize(
+    "bad_status",
+    [
+        "running",
+        "active",
+        "GPU Ready",
+        "disabled",
+        "online",
+        "",
+        123,
+        None,
+        True,
+    ],
+)
+def test_reject_unsupported_gpu_status(bad_status) -> None:
+    """Verify unsupported GPU statuses raise ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_gpu_status(bad_status)  # type: ignore[arg-type]
+
+
+def test_reject_available_without_device_name() -> None:
+    """Verify 'Available' status raises ValueError when device_name is None."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_gpu_status("Available")
+
+
+def test_reject_available_with_empty_device_name() -> None:
+    """Verify 'Available' status raises ValueError when device_name is an empty string."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_gpu_status("Available", device_name="")
+
+
+def test_gpu_status_does_not_auto_change_on_load_demo() -> None:
+    """Verify GPU status is not automatically set to Available by load_demo_results."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+            gpu_status_widget = app.query_one("#gpu-status", Label)
+            assert "Available" not in str(gpu_status_widget.render()), (
+                "GPU status must not be automatically set to 'Available' by load_demo_results"
+            )
+            assert "Not checked" in str(gpu_status_widget.render())
+    _run(_inner())
+
+
+def test_gpu_status_in_running_app() -> None:
+    """Verify GPU status widgets are queryable in a live running app."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            status_widget = app.query_one("#gpu-status", Label)
+            device_widget = app.query_one("#gpu-device", Label)
+            assert status_widget is not None
+            assert device_widget is not None
+            assert "Not checked" in str(status_widget.render())
+            assert "Not detected" in str(device_widget.render())
+    _run(_inner())
+
+
+def test_update_gpu_status_in_running_app() -> None:
+    """Verify update_gpu_status works correctly in a live running app."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.update_gpu_status("Checking")
+            status_widget = app.query_one("#gpu-status", Label)
+            assert "Checking" in str(status_widget.render())
+
+            app.update_gpu_status("Available", device_name="NVIDIA Tesla T4")
+            status_widget = app.query_one("#gpu-status", Label)
+            device_widget = app.query_one("#gpu-device", Label)
+            assert "Available" in str(status_widget.render())
+            assert "NVIDIA Tesla T4" in str(device_widget.render())
+
+            app.update_gpu_status("Unavailable")
+            assert "Unavailable" in str(status_widget.render())
+            assert "Not detected" in str(device_widget.render())
+    _run(_inner())
+
+
+def test_gpu_status_widgets_have_unique_ids_no_collision() -> None:
+    """Verify gpu-status and gpu-device IDs do not collide with existing widget IDs."""
+    app = GeneWeaverApp()
+    top_level = list(app.compose())
+
+    all_ids: list[str] = []
+
+    def collect_ids(widget) -> None:
+        if getattr(widget, "id", None):
+            all_ids.append(widget.id)
+        for child in getattr(widget, "_pending_children", []):
+            collect_ids(child)
+        if isinstance(widget, (ProjectStatusPanel, GpuStatusPanel, ProcessingInfoPanel, ResultsPanel)):
+            for composed_child in widget.compose():
+                collect_ids(composed_child)
+
+    for w in top_level:
+        collect_ids(w)
+
+    assert "gpu-status" in all_ids, "gpu-status widget ID must be present"
+    assert "gpu-device" in all_ids, "gpu-device widget ID must be present"
+    assert len(all_ids) == len(set(all_ids)), f"Duplicate widget IDs detected: {all_ids}"
+
+
+def test_existing_dashboard_features_unaffected_by_gpu_section() -> None:
+    """Verify all existing dashboard features still work after GPU section was added."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            # Scan status
+            app.update_scan_status("Scanning")
+            assert app.scan_status == "Scanning"
+
+            # Progress
+            app.update_scan_progress(75)
+            assert app.scan_progress == 75
+
+            # Results table
+            app.update_alignment_results([_SAMPLE_RESULT_1, _SAMPLE_RESULT_2])
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 2
+
+            # Demo mode
+            app.load_demo_results()
+            assert app.is_demo_mode is True
+            demo_lbl = app.query_one("#demo-data-label", Label)
+            assert demo_lbl.display is True
+
+            # GPU section is independent
+            app.update_gpu_status("Available", device_name="NVIDIA GeForce GTX 1660")
+            gpu_lbl = app.query_one("#gpu-status", Label)
+            assert "Available" in str(gpu_lbl.render())
     _run(_inner())
