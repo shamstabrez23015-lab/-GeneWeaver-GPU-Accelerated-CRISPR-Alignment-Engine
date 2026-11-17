@@ -1,12 +1,12 @@
 """
 GeneWeaver: GPU-Accelerated CRISPR Alignment Engine
-Terminal Dashboard (Day 4)
+Terminal Dashboard (Day 7)
 
 A clean, modular terminal interface built with Textual with a structured
 layout including a Header, Sidebar (system and engine status), Main Content
-area (processing info, progress bar at 0%, mismatch counts, alignment results),
-and Footer. Provides dynamic update capabilities for scan status, progress,
-and an alignment results DataTable.
+area (processing info, progress bar at 0%, mismatch counts, alignment results,
+benchmark results), and Footer. Provides dynamic update capabilities for scan
+status, progress, alignment results DataTable, and benchmark results.
 """
 
 from __future__ import annotations
@@ -19,6 +19,20 @@ from textual.widgets import DataTable, Footer, Header, Label, ProgressBar
 # Required fields for update_alignment_results
 _REQUIRED_RESULT_FIELDS = frozenset(
     {"record_id", "start", "end", "matched_sequence", "mismatch_count"}
+)
+
+# Required fields for update_benchmark_results
+_REQUIRED_BENCHMARK_FIELDS = frozenset(
+    {
+        "cpu_average_seconds",
+        "gpu_average_seconds",
+        "speedup",
+        "cpu_match_count",
+        "gpu_match_count",
+        "results_match",
+        "gpu_available",
+        "message",
+    }
 )
 
 # Demo label disclaimer
@@ -226,6 +240,55 @@ class ResultsPanel(Container):
             raise
 
 
+class BenchmarkResultsPanel(Container):
+    """Main content panel displaying CPU vs GPU benchmark timing results."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.border_title = "Benchmark Results"
+        self._cpu_time_widget = Label(
+            "[b]CPU Average Time:[/b] Not run",
+            id="cpu-benchmark-time",
+            classes="stat-line",
+        )
+        self._gpu_time_widget = Label(
+            "[b]GPU Average Time:[/b] Not run",
+            id="gpu-benchmark-time",
+            classes="stat-line",
+        )
+        self._speedup_widget = Label(
+            "[b]GPU Speedup:[/b] Not available",
+            id="gpu-benchmark-speedup",
+            classes="stat-line",
+        )
+        self._status_widget = Label(
+            "[b]Benchmark Status:[/b] Not run",
+            id="benchmark-status",
+            classes="stat-line",
+        )
+
+    def compose(self) -> ComposeResult:
+        yield self._cpu_time_widget
+        yield self._gpu_time_widget
+        yield self._speedup_widget
+        yield self._status_widget
+
+    def query_one(self, selector, *args, **kwargs):
+        """Query for a child widget with fallback for unmounted tests."""
+        try:
+            return super().query_one(selector, *args, **kwargs)
+        except Exception:
+            mapping = {
+                "#cpu-benchmark-time": self._cpu_time_widget,
+                "#gpu-benchmark-time": self._gpu_time_widget,
+                "#gpu-benchmark-speedup": self._speedup_widget,
+                "#benchmark-status": self._status_widget,
+            }
+            if selector in mapping:
+                return mapping[selector]
+            raise
+
+
 class GeneWeaverApp(App):
     """Main Textual application for GeneWeaver."""
 
@@ -321,6 +384,16 @@ class GeneWeaverApp(App):
         padding: 1 1;
     }
 
+    BenchmarkResultsPanel {
+        width: 100%;
+        height: auto;
+        min-height: 8;
+        border: round $warning;
+        background: $panel;
+        padding: 1 1;
+        margin-top: 1;
+    }
+
     .stat-line {
         margin-bottom: 1;
     }
@@ -362,6 +435,7 @@ class GeneWeaverApp(App):
         self.gpu_status_panel = GpuStatusPanel(id="gpu-status-panel")
         self.processing_info_panel = ProcessingInfoPanel(id="processing-info-panel")
         self.results_panel = ResultsPanel(id="results-panel")
+        self.benchmark_results_panel = BenchmarkResultsPanel(id="benchmark-results-panel")
 
     @property
     def demo_label(self) -> Label:
@@ -392,6 +466,7 @@ class GeneWeaverApp(App):
             Container(
                 self.processing_info_panel,
                 self.results_panel,
+                self.benchmark_results_panel,
                 id="main-content",
             ),
             id="main-container",
@@ -429,6 +504,16 @@ class GeneWeaverApp(App):
                 return self.gpu_status_panel.gpu_status_widget
             if selector == "#gpu-device" and hasattr(self, "gpu_status_panel"):
                 return self.gpu_status_panel.gpu_device_widget
+            if selector == "#benchmark-results-panel" and hasattr(self, "benchmark_results_panel"):
+                return self.benchmark_results_panel
+            if selector == "#cpu-benchmark-time" and hasattr(self, "benchmark_results_panel"):
+                return self.benchmark_results_panel._cpu_time_widget
+            if selector == "#gpu-benchmark-time" and hasattr(self, "benchmark_results_panel"):
+                return self.benchmark_results_panel._gpu_time_widget
+            if selector == "#gpu-benchmark-speedup" and hasattr(self, "benchmark_results_panel"):
+                return self.benchmark_results_panel._speedup_widget
+            if selector == "#benchmark-status" and hasattr(self, "benchmark_results_panel"):
+                return self.benchmark_results_panel._status_widget
             raise
 
     def query(self, selector=None, *args, **kwargs):
@@ -601,6 +686,106 @@ class GeneWeaverApp(App):
         try:
             lbl = super().query_one("#label-progress", Label)
             lbl.update(f"[b]Alignment progress:[/b] {progress}%")
+        except Exception:
+            pass
+
+    def update_benchmark_results(self, results: dict) -> None:
+        """Update the benchmark results panel from a benchmark data dictionary.
+
+        Args:
+            results: dict containing benchmark data with the following keys:
+                - cpu_average_seconds  : CPU average alignment time (float)
+                - gpu_average_seconds  : GPU average alignment time (float or None)
+                - speedup              : measured GPU speedup factor (float or None)
+                - cpu_match_count      : number of CPU alignment matches (int)
+                - gpu_match_count      : number of GPU alignment matches (int or None)
+                - results_match        : whether CPU/GPU results agree (bool or None)
+                - gpu_available        : whether GPU execution was performed (bool)
+                - message              : benchmark summary message (str)
+
+        Raises:
+            ValueError: if results is not a dict or is missing required keys.
+        """
+        if not isinstance(results, dict):
+            raise ValueError(
+                f"update_benchmark_results expects a dict, got {type(results).__name__!r}"
+            )
+        missing = _REQUIRED_BENCHMARK_FIELDS - results.keys()
+        if missing:
+            raise ValueError(
+                f"Benchmark results dict is missing required fields: "
+                f"{', '.join(sorted(missing))}"
+            )
+
+        # --- CPU average time ---
+        cpu_secs = results["cpu_average_seconds"]
+        if cpu_secs is not None:
+            cpu_ms = float(cpu_secs) * 1000.0
+            cpu_display = f"{cpu_ms:.3f} ms"
+        else:
+            cpu_display = "Not run"
+
+        # --- GPU average time ---
+        gpu_available: bool = bool(results["gpu_available"])
+        gpu_secs = results["gpu_average_seconds"]
+        if not gpu_available:
+            gpu_display = "GPU Unavailable"
+        elif gpu_secs is not None:
+            gpu_ms = float(gpu_secs) * 1000.0
+            gpu_display = f"{gpu_ms:.3f} ms"
+        else:
+            gpu_display = "Not run"
+
+        # --- GPU speedup ---
+        speedup = results["speedup"]
+        if not gpu_available:
+            speedup_display = "GPU Unavailable"
+        elif speedup is not None:
+            speedup_display = f"{float(speedup):.2f}x"
+        else:
+            speedup_display = "Not available"
+
+        # --- Benchmark status / message ---
+        message: str = str(results["message"]) if results["message"] is not None else ""
+        results_match = results["results_match"]
+        if results_match is True:
+            match_note = " | Results match: Yes ✓"
+        elif results_match is False:
+            match_note = " | Results match: No ✗"
+        else:
+            match_note = ""
+        status_display = f"{message}{match_note}" if message else f"Not run{match_note}"
+
+        # Update widgets
+        panel = self.benchmark_results_panel
+        panel._cpu_time_widget.update(f"[b]CPU Average Time:[/b] {cpu_display}")
+        panel._gpu_time_widget.update(f"[b]GPU Average Time:[/b] {gpu_display}")
+        panel._speedup_widget.update(f"[b]GPU Speedup:[/b] {speedup_display}")
+        panel._status_widget.update(f"[b]Benchmark Status:[/b] {status_display}")
+
+        # Also attempt live DOM updates (no-op when not mounted)
+        try:
+            self.query_one("#cpu-benchmark-time", Label).update(
+                f"[b]CPU Average Time:[/b] {cpu_display}"
+            )
+        except Exception:
+            pass
+        try:
+            self.query_one("#gpu-benchmark-time", Label).update(
+                f"[b]GPU Average Time:[/b] {gpu_display}"
+            )
+        except Exception:
+            pass
+        try:
+            self.query_one("#gpu-benchmark-speedup", Label).update(
+                f"[b]GPU Speedup:[/b] {speedup_display}"
+            )
+        except Exception:
+            pass
+        try:
+            self.query_one("#benchmark-status", Label).update(
+                f"[b]Benchmark Status:[/b] {status_display}"
+            )
         except Exception:
             pass
 

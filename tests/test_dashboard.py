@@ -1,5 +1,5 @@
 """
-Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, Day 3, Day 4, Day 5, and Day 6).
+Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, Day 3, Day 4, Day 5, Day 6, and Day 7).
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from textual.widgets import DataTable, Footer, Header, Label, ProgressBar
 from src.dashboard import (
     DEMO_ALIGNMENT_RESULTS,
     DEMO_LABEL_TEXT,
+    BenchmarkResultsPanel,
     GeneWeaverApp,
     GpuStatusPanel,
     ProcessingInfoPanel,
@@ -1118,4 +1119,452 @@ def test_existing_dashboard_features_unaffected_by_gpu_section() -> None:
             app.update_gpu_status("Available", device_name="NVIDIA GeForce GTX 1660")
             gpu_lbl = app.query_one("#gpu-status", Label)
             assert "Available" in str(gpu_lbl.render())
+    _run(_inner())
+
+
+# =============================================================================
+# Day 7 Tests: Benchmark Results Panel
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Sample benchmark dictionaries — manually crafted for testing purposes only.
+# These do NOT represent real benchmark measurements.
+# ---------------------------------------------------------------------------
+
+_SAMPLE_BENCH_CPU_ONLY = {
+    "cpu_average_seconds": 0.250,       # 250 ms — test value only
+    "gpu_average_seconds": None,        # GPU not measured
+    "speedup": None,
+    "cpu_match_count": 10,
+    "gpu_match_count": None,
+    "results_match": None,
+    "gpu_available": False,
+    "message": "CPU-only benchmark complete",
+}
+
+_SAMPLE_BENCH_GPU_AVAILABLE = {
+    "cpu_average_seconds": 0.200,       # 200 ms — test value only
+    "gpu_average_seconds": 0.040,       # 40 ms — test value only
+    "speedup": 5.0,                     # test speedup value
+    "cpu_match_count": 8,
+    "gpu_match_count": 8,
+    "results_match": True,
+    "gpu_available": True,
+    "message": "GPU benchmark complete",
+}
+
+_SAMPLE_BENCH_GPU_UNAVAILABLE = {
+    "cpu_average_seconds": 0.180,       # 180 ms — test value only
+    "gpu_average_seconds": None,
+    "speedup": None,
+    "cpu_match_count": 6,
+    "gpu_match_count": None,
+    "results_match": None,
+    "gpu_available": False,
+    "message": "GPU not available on this machine",
+}
+
+_SAMPLE_BENCH_RESULTS_MISMATCH = {
+    "cpu_average_seconds": 0.300,       # 300 ms — test value only
+    "gpu_average_seconds": 0.060,       # 60 ms — test value only
+    "speedup": 5.0,                     # test speedup value
+    "cpu_match_count": 10,
+    "gpu_match_count": 9,
+    "results_match": False,
+    "gpu_available": True,
+    "message": "Result mismatch detected",
+}
+
+_SAMPLE_BENCH_MISSING_GPU_VALUES = {
+    "cpu_average_seconds": 0.150,       # 150 ms — test value only
+    "gpu_average_seconds": None,
+    "speedup": None,
+    "cpu_match_count": 5,
+    "gpu_match_count": None,
+    "results_match": None,
+    "gpu_available": True,              # GPU attempted but values missing
+    "message": "GPU execution incomplete",
+}
+
+
+# ---------------------------------------------------------------------------
+# Structure tests — no live app needed
+# ---------------------------------------------------------------------------
+
+
+def test_benchmark_results_panel_can_be_instantiated() -> None:
+    """Verify BenchmarkResultsPanel can be instantiated independently."""
+    panel = BenchmarkResultsPanel()
+    assert panel is not None
+    assert panel.border_title == "Benchmark Results"
+
+
+def test_benchmark_results_panel_initial_cpu_time() -> None:
+    """Verify CPU Average Time initially reads 'Not run'."""
+    panel = BenchmarkResultsPanel()
+    assert "Not run" in str(panel._cpu_time_widget.render())
+
+
+def test_benchmark_results_panel_initial_gpu_time() -> None:
+    """Verify GPU Average Time initially reads 'Not run'."""
+    panel = BenchmarkResultsPanel()
+    assert "Not run" in str(panel._gpu_time_widget.render())
+
+
+def test_benchmark_results_panel_initial_speedup() -> None:
+    """Verify GPU Speedup initially reads 'Not available'."""
+    panel = BenchmarkResultsPanel()
+    assert "Not available" in str(panel._speedup_widget.render())
+
+
+def test_benchmark_results_panel_initial_status() -> None:
+    """Verify Benchmark Status initially reads 'Not run'."""
+    panel = BenchmarkResultsPanel()
+    assert "Not run" in str(panel._status_widget.render())
+
+
+def test_benchmark_results_panel_compose_stable_ids() -> None:
+    """Verify BenchmarkResultsPanel yields widgets with the required stable IDs."""
+    panel = BenchmarkResultsPanel()
+    composed = {w.id: w for w in panel.compose() if getattr(w, "id", None)}
+    assert "cpu-benchmark-time" in composed
+    assert "gpu-benchmark-time" in composed
+    assert "gpu-benchmark-speedup" in composed
+    assert "benchmark-status" in composed
+
+
+def test_app_has_benchmark_results_panel() -> None:
+    """Verify GeneWeaverApp creates a BenchmarkResultsPanel instance."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "benchmark_results_panel")
+    assert isinstance(app.benchmark_results_panel, BenchmarkResultsPanel)
+
+
+def test_update_benchmark_results_method_exists() -> None:
+    """Verify GeneWeaverApp exposes update_benchmark_results as a callable."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "update_benchmark_results")
+    assert callable(app.update_benchmark_results)
+
+
+# ---------------------------------------------------------------------------
+# Initial display tests (via app query_one fallback)
+# ---------------------------------------------------------------------------
+
+
+def test_app_initial_cpu_benchmark_time_not_run() -> None:
+    """Verify app-level CPU Average Time widget initially shows 'Not run'."""
+    app = GeneWeaverApp()
+    widget = app.query_one("#cpu-benchmark-time")
+    assert "Not run" in str(widget.render())
+
+
+def test_app_initial_gpu_benchmark_time_not_run() -> None:
+    """Verify app-level GPU Average Time widget initially shows 'Not run'."""
+    app = GeneWeaverApp()
+    widget = app.query_one("#gpu-benchmark-time")
+    assert "Not run" in str(widget.render())
+
+
+def test_app_initial_gpu_benchmark_speedup_not_available() -> None:
+    """Verify app-level GPU Speedup widget initially shows 'Not available'."""
+    app = GeneWeaverApp()
+    widget = app.query_one("#gpu-benchmark-speedup")
+    assert "Not available" in str(widget.render())
+
+
+def test_app_initial_benchmark_status_not_run() -> None:
+    """Verify app-level Benchmark Status widget initially shows 'Not run'."""
+    app = GeneWeaverApp()
+    widget = app.query_one("#benchmark-status")
+    assert "Not run" in str(widget.render())
+
+
+# ---------------------------------------------------------------------------
+# update_benchmark_results tests (CPU-only / GPU available / GPU unavailable)
+# ---------------------------------------------------------------------------
+
+
+def test_update_benchmark_cpu_time_displayed_in_ms() -> None:
+    """Verify CPU average time is formatted in milliseconds after update."""
+    app = GeneWeaverApp()
+    # _SAMPLE_BENCH_CPU_ONLY has cpu_average_seconds=0.250 → 250.000 ms
+    app.update_benchmark_results(_SAMPLE_BENCH_CPU_ONLY)
+    widget = app.query_one("#cpu-benchmark-time")
+    rendered = str(widget.render())
+    assert "250.000 ms" in rendered
+
+
+def test_update_benchmark_gpu_time_when_available() -> None:
+    """Verify GPU average time is shown in ms when GPU benchmark ran successfully."""
+    app = GeneWeaverApp()
+    # _SAMPLE_BENCH_GPU_AVAILABLE has gpu_average_seconds=0.040 → 40.000 ms
+    app.update_benchmark_results(_SAMPLE_BENCH_GPU_AVAILABLE)
+    widget = app.query_one("#gpu-benchmark-time")
+    rendered = str(widget.render())
+    assert "40.000 ms" in rendered
+
+
+def test_update_benchmark_gpu_time_not_shown_when_gpu_unavailable() -> None:
+    """Verify GPU Average Time shows 'GPU Unavailable' when gpu_available is False."""
+    app = GeneWeaverApp()
+    app.update_benchmark_results(_SAMPLE_BENCH_GPU_UNAVAILABLE)
+    widget = app.query_one("#gpu-benchmark-time")
+    rendered = str(widget.render())
+    assert "GPU Unavailable" in rendered
+    # Must NOT display a fabricated time value
+    assert "ms" not in rendered
+
+
+def test_update_benchmark_gpu_speedup_when_available() -> None:
+    """Verify GPU Speedup is shown when a valid measured speedup is provided."""
+    app = GeneWeaverApp()
+    # _SAMPLE_BENCH_GPU_AVAILABLE has speedup=5.0
+    app.update_benchmark_results(_SAMPLE_BENCH_GPU_AVAILABLE)
+    widget = app.query_one("#gpu-benchmark-speedup")
+    rendered = str(widget.render())
+    assert "5.00x" in rendered
+
+
+def test_update_benchmark_gpu_speedup_unavailable_when_gpu_not_run() -> None:
+    """Verify GPU Speedup shows 'GPU Unavailable' when gpu_available is False."""
+    app = GeneWeaverApp()
+    app.update_benchmark_results(_SAMPLE_BENCH_GPU_UNAVAILABLE)
+    widget = app.query_one("#gpu-benchmark-speedup")
+    rendered = str(widget.render())
+    assert "GPU Unavailable" in rendered
+
+
+def test_update_benchmark_gpu_time_not_run_when_missing_values() -> None:
+    """Verify GPU Average Time shows 'Not run' when gpu_available but values missing."""
+    app = GeneWeaverApp()
+    app.update_benchmark_results(_SAMPLE_BENCH_MISSING_GPU_VALUES)
+    widget = app.query_one("#gpu-benchmark-time")
+    rendered = str(widget.render())
+    # gpu_available=True but gpu_average_seconds=None → "Not run"
+    assert "Not run" in rendered
+    # Must NOT fabricate a timing value
+    assert "ms" not in rendered
+
+
+def test_update_benchmark_speedup_not_available_when_missing_values() -> None:
+    """Verify GPU Speedup shows 'Not available' when gpu_available but speedup is None."""
+    app = GeneWeaverApp()
+    app.update_benchmark_results(_SAMPLE_BENCH_MISSING_GPU_VALUES)
+    widget = app.query_one("#gpu-benchmark-speedup")
+    rendered = str(widget.render())
+    assert "Not available" in rendered
+
+
+def test_update_benchmark_status_message_shown() -> None:
+    """Verify benchmark message is reflected in the status widget."""
+    app = GeneWeaverApp()
+    app.update_benchmark_results(_SAMPLE_BENCH_GPU_AVAILABLE)
+    widget = app.query_one("#benchmark-status")
+    rendered = str(widget.render())
+    assert "GPU benchmark complete" in rendered
+
+
+def test_update_benchmark_results_match_indicated() -> None:
+    """Verify results_match=True is clearly indicated in the status widget."""
+    app = GeneWeaverApp()
+    app.update_benchmark_results(_SAMPLE_BENCH_GPU_AVAILABLE)
+    widget = app.query_one("#benchmark-status")
+    rendered = str(widget.render())
+    assert "Yes" in rendered or "match" in rendered.lower()
+
+
+def test_update_benchmark_results_mismatch_indicated() -> None:
+    """Verify results_match=False is clearly indicated in the status widget."""
+    app = GeneWeaverApp()
+    app.update_benchmark_results(_SAMPLE_BENCH_RESULTS_MISMATCH)
+    widget = app.query_one("#benchmark-status")
+    rendered = str(widget.render())
+    assert "No" in rendered or "mismatch" in rendered.lower() or "✗" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Validation tests
+# ---------------------------------------------------------------------------
+
+
+def test_update_benchmark_results_rejects_non_dict() -> None:
+    """Verify update_benchmark_results raises ValueError for non-dict input."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_benchmark_results("not a dict")  # type: ignore[arg-type]
+
+
+def test_update_benchmark_results_rejects_list() -> None:
+    """Verify update_benchmark_results raises ValueError for a list."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_benchmark_results([])  # type: ignore[arg-type]
+
+
+def test_update_benchmark_results_rejects_missing_key() -> None:
+    """Verify update_benchmark_results raises ValueError when required key is missing."""
+    app = GeneWeaverApp()
+    incomplete = dict(_SAMPLE_BENCH_GPU_AVAILABLE)
+    del incomplete["cpu_average_seconds"]
+    with pytest.raises(ValueError, match="cpu_average_seconds"):
+        app.update_benchmark_results(incomplete)
+
+
+def test_update_benchmark_results_rejects_multiple_missing_keys() -> None:
+    """Verify ValueError is raised when several required keys are missing."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_benchmark_results({"message": "incomplete"})
+
+
+# ---------------------------------------------------------------------------
+# No duplicate widgets / repeated updates
+# ---------------------------------------------------------------------------
+
+
+def test_update_benchmark_results_multiple_times_no_duplicates() -> None:
+    """Verify calling update_benchmark_results multiple times replaces, not duplicates, display."""
+    # Test without live app — verify widget count stays at 4 on the panel object
+    app = GeneWeaverApp()
+    panel = app.benchmark_results_panel
+
+    # Compose always returns exactly 4 benchmark widgets
+    initial_count = len(list(panel.compose()))
+    assert initial_count == 4
+
+    # First update
+    app.update_benchmark_results(_SAMPLE_BENCH_CPU_ONLY)
+    assert len(list(panel.compose())) == initial_count
+
+    # Second update with different data
+    app.update_benchmark_results(_SAMPLE_BENCH_GPU_AVAILABLE)
+    assert len(list(panel.compose())) == initial_count
+
+    # Third update
+    app.update_benchmark_results(_SAMPLE_BENCH_GPU_UNAVAILABLE)
+    assert len(list(panel.compose())) == initial_count
+
+    # Widget IDs must remain unique across calls
+    all_ids = [w.id for w in panel.compose() if getattr(w, "id", None)]
+    assert len(all_ids) == len(set(all_ids))
+    assert set(all_ids) == {
+        "cpu-benchmark-time",
+        "gpu-benchmark-time",
+        "gpu-benchmark-speedup",
+        "benchmark-status",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Widget IDs uniqueness (benchmark panel among all dashboard widgets)
+# ---------------------------------------------------------------------------
+
+
+def test_benchmark_widget_ids_do_not_collide() -> None:
+    """Verify benchmark widget IDs do not collide with existing dashboard IDs."""
+    app = GeneWeaverApp()
+    top_level = list(app.compose())
+
+    all_ids: list[str] = []
+
+    def collect_ids(widget) -> None:
+        if getattr(widget, "id", None):
+            all_ids.append(widget.id)
+        for child in getattr(widget, "_pending_children", []):
+            collect_ids(child)
+        if isinstance(
+            widget,
+            (ProjectStatusPanel, GpuStatusPanel, ProcessingInfoPanel, ResultsPanel, BenchmarkResultsPanel),
+        ):
+            for composed_child in widget.compose():
+                collect_ids(composed_child)
+
+    for w in top_level:
+        collect_ids(w)
+
+    assert "cpu-benchmark-time" in all_ids
+    assert "gpu-benchmark-time" in all_ids
+    assert "gpu-benchmark-speedup" in all_ids
+    assert "benchmark-status" in all_ids
+    assert len(all_ids) == len(set(all_ids)), f"Duplicate widget IDs: {all_ids}"
+
+
+# ---------------------------------------------------------------------------
+# Existing dashboard features unaffected
+# ---------------------------------------------------------------------------
+
+
+def test_existing_dashboard_features_unaffected_by_benchmark_panel() -> None:
+    """Verify all pre-existing dashboard features still work after adding benchmark panel."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            # Scan status
+            app.update_scan_status("Scanning")
+            assert app.scan_status == "Scanning"
+
+            # Progress
+            app.update_scan_progress(60)
+            assert app.scan_progress == 60
+
+            # Results table
+            app.update_alignment_results([_SAMPLE_RESULT_1, _SAMPLE_RESULT_2])
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 2
+
+            # Demo mode
+            app.load_demo_results()
+            assert app.is_demo_mode is True
+            demo_lbl = app.query_one("#demo-data-label", Label)
+            assert demo_lbl.display is True
+
+            # GPU status panel
+            app.update_gpu_status("Available", device_name="NVIDIA GeForce RTX 4090")
+            gpu_lbl = app.query_one("#gpu-status", Label)
+            assert "Available" in str(gpu_lbl.render())
+
+            # Benchmark panel (using test data, not real measurements)
+            app.update_benchmark_results(_SAMPLE_BENCH_GPU_AVAILABLE)
+            cpu_lbl = app.query_one("#cpu-benchmark-time", Label)
+            assert "200.000 ms" in str(cpu_lbl.render())
+
+    _run(_inner())
+
+
+def test_benchmark_does_not_auto_populate_on_startup() -> None:
+    """Verify benchmark fields are Not run / Not available on fresh startup."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            cpu_w = app.query_one("#cpu-benchmark-time", Label)
+            gpu_w = app.query_one("#gpu-benchmark-time", Label)
+            spd_w = app.query_one("#gpu-benchmark-speedup", Label)
+            sta_w = app.query_one("#benchmark-status", Label)
+
+            assert "Not run" in str(cpu_w.render())
+            assert "Not run" in str(gpu_w.render())
+            assert "Not available" in str(spd_w.render())
+            assert "Not run" in str(sta_w.render())
+
+    _run(_inner())
+
+
+def test_load_demo_results_does_not_populate_benchmark_panel() -> None:
+    """Verify calling load_demo_results does NOT auto-populate benchmark fields."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+
+            cpu_w = app.query_one("#cpu-benchmark-time", Label)
+            gpu_w = app.query_one("#gpu-benchmark-time", Label)
+            spd_w = app.query_one("#gpu-benchmark-speedup", Label)
+            sta_w = app.query_one("#benchmark-status", Label)
+
+            assert "Not run" in str(cpu_w.render())
+            assert "Not run" in str(gpu_w.render())
+            assert "Not available" in str(spd_w.render())
+            assert "Not run" in str(sta_w.render())
+
     _run(_inner())
