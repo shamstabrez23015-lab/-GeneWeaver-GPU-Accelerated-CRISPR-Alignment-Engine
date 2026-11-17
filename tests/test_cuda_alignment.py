@@ -16,6 +16,7 @@ from src.cuda_alignment import (
     decode_sequence,
     encode_sequence,
     find_off_targets_gpu,
+    find_off_targets_gpu_chunked,
     is_cuda_available,
 )
 from src.models import AlignmentMatch
@@ -259,4 +260,264 @@ def test_real_gpu_mismatch_detection():
     assert len(matches) == 1
     assert matches[0].mismatch_count == 1
     assert matches[0].mismatch_positions == [2]
+
+
+# ---------------------------------------------------------------------------
+# Day 7 – Chunked GPU Alignment Tests
+# ---------------------------------------------------------------------------
+
+
+def _cpu_simulate_alignment(genome: str, guide: str, max_mismatches: int = 3):
+    """CPU simulation of GPU alignment used to mock find_off_targets_gpu in chunked tests.
+
+    Replicates the exact sliding-window logic of the CUDA kernel so that
+    chunked tests are hardware-independent.
+    """
+    cleaned_genome = "".join(genome.split()).upper()
+    cleaned_guide = "".join(guide.split()).upper()
+    genome_len = len(cleaned_genome)
+    guide_len = len(cleaned_guide)
+    if genome_len < guide_len:
+        return []
+
+    matches: list[AlignmentMatch] = []
+    for start in range(genome_len - guide_len + 1):
+        mismatch_positions: list[int] = []
+        for j in range(guide_len):
+            if cleaned_genome[start + j] != cleaned_guide[j]:
+                mismatch_positions.append(j)
+        if len(mismatch_positions) <= max_mismatches:
+            matches.append(
+                AlignmentMatch(
+                    start=start,
+                    end=start + guide_len,
+                    matched_sequence=cleaned_genome[start : start + guide_len],
+                    mismatch_count=len(mismatch_positions),
+                    mismatch_positions=mismatch_positions,
+                )
+            )
+    return matches
+
+
+class TestChunkedGpuAlignment:
+    """Tests for find_off_targets_gpu_chunked (Day 7)."""
+
+    # ------------------------------------------------------------------
+    # Helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _patched_chunked(genome, guide, max_mismatches=3, chunk_size=1000):
+        """Run find_off_targets_gpu_chunked with the GPU call mocked by CPU simulation."""
+        with patch(
+            "src.cuda_alignment.find_off_targets_gpu",
+            side_effect=_cpu_simulate_alignment,
+        ):
+            return find_off_targets_gpu_chunked(
+                genome, guide, max_mismatches=max_mismatches, chunk_size=chunk_size
+            )
+
+    # ------------------------------------------------------------------
+    # Input validation
+    # ------------------------------------------------------------------
+
+    def test_invalid_chunk_size_zero(self):
+        """chunk_size=0 must raise ValueError."""
+        with pytest.raises(ValueError, match="positive integer"):
+            find_off_targets_gpu_chunked("ACGT", "ACGT", chunk_size=0)
+
+    def test_invalid_chunk_size_negative(self):
+        """Negative chunk_size must raise ValueError."""
+        with pytest.raises(ValueError, match="positive integer"):
+            find_off_targets_gpu_chunked("ACGT", "ACGT", chunk_size=-1)
+
+    def test_invalid_chunk_size_float(self):
+        """Float chunk_size must raise ValueError."""
+        with pytest.raises(ValueError, match="positive integer"):
+            find_off_targets_gpu_chunked("ACGT", "ACGT", chunk_size=4.5)
+
+    def test_negative_max_mismatches(self):
+        """Negative max_mismatches must raise ValueError."""
+        with pytest.raises(ValueError, match="non-negative"):
+            find_off_targets_gpu_chunked("ACGT", "ACGT", max_mismatches=-1)
+
+    def test_invalid_dna_genome(self):
+        """Invalid character in genome must raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid DNA character"):
+            find_off_targets_gpu_chunked("ACGTX", "ACGT", chunk_size=10)
+
+    def test_invalid_dna_guide(self):
+        """Invalid character in guide must raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid DNA character"):
+            find_off_targets_gpu_chunked("ACGT", "ACGTZ", chunk_size=10)
+
+    def test_empty_guide_raises(self):
+        """Empty guide sequence must raise ValueError."""
+        with pytest.raises(ValueError, match="Guide sequence cannot be empty"):
+            find_off_targets_gpu_chunked("ACGTACGT", "", chunk_size=10)
+
+    def test_whitespace_only_guide_raises(self):
+        """Whitespace-only guide (cleaned to empty) must raise ValueError."""
+        with pytest.raises(ValueError):
+            find_off_targets_gpu_chunked("ACGT", "   \t\n  ", chunk_size=10)
+
+    # ------------------------------------------------------------------
+    # Return-value edge cases (no CUDA call needed)
+    # ------------------------------------------------------------------
+
+    def test_genome_shorter_than_guide_returns_empty(self):
+        """When genome < guide, return [] without calling GPU."""
+        result = find_off_targets_gpu_chunked("ACGT", "ACGTACGT", chunk_size=100)
+        assert result == []
+
+    # ------------------------------------------------------------------
+    # Single-chunk path (genome fits in one chunk)
+    # ------------------------------------------------------------------
+
+    def test_genome_smaller_than_chunk(self):
+        """Genome shorter than chunk_size uses a single GPU call."""
+        result = self._patched_chunked("ACGTACGT", "ACGT", max_mismatches=0, chunk_size=1000)
+        starts = [m.start for m in result]
+        assert sorted(starts) == [0, 4]
+
+    def test_exact_match_single_chunk(self):
+        """Single chunk path: exact match coordinates are correct."""
+        result = self._patched_chunked("TTTTACGTTTTT", "ACGT", max_mismatches=0, chunk_size=1000)
+        assert len(result) == 1
+        assert result[0].start == 4
+        assert result[0].end == 8
+        assert result[0].matched_sequence == "ACGT"
+
+    def test_match_at_beginning(self):
+        """Match at position 0 is correctly captured."""
+        result = self._patched_chunked("ACGTNNNN", "ACGT", max_mismatches=0, chunk_size=4)
+        assert result[0].start == 0
+        assert result[0].end == 4
+
+    def test_match_at_end(self):
+        """Match at the very end of the genome is correctly captured."""
+        result = self._patched_chunked("NNNNACGT", "ACGT", max_mismatches=0, chunk_size=4)
+        ends = [m.end for m in result]
+        assert 8 in ends
+        idx = [m.end for m in result].index(8)
+        assert result[idx].start == 4
+
+    # ------------------------------------------------------------------
+    # Multi-chunk path
+    # ------------------------------------------------------------------
+
+    def test_genome_multiple_chunks(self):
+        """Two distinct matches spanning multiple chunks are both found."""
+        # Guide: ACGT (4 bp), chunk_size=6
+        # Matches at 0 and 8 in a 12-bp genome
+        genome = "ACGTTTTTACGT"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=6)
+        starts = [m.start for m in result]
+        assert 0 in starts
+        assert 8 in starts
+
+    def test_match_crossing_chunk_boundary_found_exactly_once(self):
+        """A match that spans the boundary between two chunks appears exactly once."""
+        # chunk_size=4, guide=ACGT (4 bp), overlap=3
+        # Chunk 0 covers genome[0:7], chunk 1 covers genome[4:8]
+        # Match at position 2 starts inside chunk 0's non-overlap zone → included once.
+        genome = "NNACGTNN"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=4)
+        starts = [m.start for m in result]
+        assert starts.count(2) == 1
+        idx = starts.index(2)
+        assert result[idx].start == 2
+        assert result[idx].end == 6
+
+    def test_no_duplicate_matches_at_boundaries(self):
+        """No match position is returned more than once across all chunks."""
+        genome = "ACGTACGTACGT"  # matches at 0, 4, 8
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=5)
+        starts = [m.start for m in result]
+        assert len(starts) == len(set(starts)), "Duplicate match positions detected"
+
+    def test_all_expected_matches_present(self):
+        """All three matches in a repeated 12-bp genome are found with chunking."""
+        genome = "ACGTACGTACGT"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=5)
+        starts = sorted(m.start for m in result)
+        assert starts == [0, 4, 8]
+
+    def test_correct_global_coordinates(self):
+        """Global start/end coordinates are preserved regardless of chunk boundaries."""
+        genome = "N" * 10 + "ACGT" + "N" * 10  # match at position 10
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=8)
+        starts = [m.start for m in result]
+        assert 10 in starts
+        idx = starts.index(10)
+        assert result[idx].end == 14
+
+    def test_final_chunk_smaller_than_chunk_size(self):
+        """The last (smaller) chunk is fully processed."""
+        genome = "ACGT" * 3  # 12 bp, chunk_size=10
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=10)
+        starts = sorted(m.start for m in result)
+        assert 0 in starts
+        assert 4 in starts
+        assert 8 in starts
+
+    def test_chunk_size_equals_genome_length(self):
+        """chunk_size == genome_length processes everything in a single chunk."""
+        genome = "ACGTACGT"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=8)
+        starts = sorted(m.start for m in result)
+        assert starts == [0, 4]
+
+    def test_chunk_size_one_base(self):
+        """chunk_size=1 (minimum valid) correctly processes every position."""
+        genome = "ACGTACGT"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=1)
+        starts = sorted(m.start for m in result)
+        assert starts == [0, 4]
+
+    def test_reconstruction_from_matched_sequences(self):
+        """Concatenating matched_sequences reproduces the genome windows correctly."""
+        genome = "ACGTACGT"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=5)
+        for match in result:
+            assert match.matched_sequence == genome[match.start : match.end]
+
+    def test_mismatch_positions_preserved_globally(self):
+        """mismatch_positions remain relative to the window (0-based within guide), not global."""
+        # Guide: ACGT, Genome: AGGTACGT → window 0 = AGGT (mismatch at index 1)
+        genome = "AGGTACGT"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=1, chunk_size=5)
+        mismatch_match = next((m for m in result if m.start == 0), None)
+        assert mismatch_match is not None
+        assert mismatch_match.mismatch_positions == [1]
+
+    def test_n_bases_allowed(self):
+        """N bases are accepted in both genome and guide."""
+        genome = "NNNNNACGTNNNNN"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=0, chunk_size=6)
+        starts = [m.start for m in result]
+        assert 5 in starts
+
+    def test_mismatches_within_threshold_across_chunks(self):
+        """Matches within max_mismatches are returned across chunk boundaries."""
+        # Guide: ACGT, Genome: AGGT (1 mismatch) + padding
+        genome = "AGGTNNNNACGT"
+        result = self._patched_chunked(genome, "ACGT", max_mismatches=1, chunk_size=6)
+        starts = [m.start for m in result]
+        assert 0 in starts   # AGGT — 1 mismatch, within threshold
+        assert 8 in starts   # ACGT — exact
+
+    # ------------------------------------------------------------------
+    # Real hardware test (skipped when no CUDA device present)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.skipif(not is_cuda_available(), reason="NVIDIA CUDA GPU not available")
+    def test_real_gpu_chunked_exact_match(self):
+        """Real GPU: chunked alignment finds exact matches at correct global positions."""
+        result = find_off_targets_gpu_chunked(
+            "ACGTACGT", "ACGT", max_mismatches=0, chunk_size=5
+        )
+        starts = sorted(m.start for m in result)
+        assert starts == [0, 4]
+        assert all(m.mismatch_count == 0 for m in result)
 

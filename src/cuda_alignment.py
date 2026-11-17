@@ -279,3 +279,106 @@ def find_off_targets_gpu(
 
     return matches
 
+
+def find_off_targets_gpu_chunked(
+    genome_sequence: str,
+    guide_sequence: str,
+    max_mismatches: int = DEFAULT_MAX_MISMATCHES,
+    chunk_size: int = 100000,
+) -> list[AlignmentMatch]:
+    """Find CRISPR off-target sites by processing the genome in overlapping chunks via GPU.
+
+    Large genomes are divided into overlapping segments so that every possible
+    genome window is evaluated by the CUDA kernel exactly once.  An overlap of
+    ``guide_length - 1`` bases is added to the right of each chunk to ensure
+    matches that cross a chunk boundary are not missed.
+
+    Parameters
+    ----------
+    genome_sequence:
+        Target genomic DNA sequence string.
+    guide_sequence:
+        Query CRISPR guide RNA / DNA sequence string.
+    max_mismatches:
+        Maximum allowable mismatches (default: 3).
+    chunk_size:
+        Number of new (non-overlapping) genome bases processed per GPU call.
+        Must be a positive integer (default: 100 000).
+
+    Returns
+    -------
+    list[AlignmentMatch]
+        Combined results from all chunks in genome order, using global
+        0-based coordinates.  No duplicates are returned.
+
+    Raises
+    ------
+    ValueError
+        If ``max_mismatches`` is negative, ``chunk_size`` is not a positive
+        integer, ``guide_sequence`` is empty, or either sequence contains
+        invalid DNA characters.
+    RuntimeError
+        If CUDA is unavailable (propagated from :func:`find_off_targets_gpu`).
+    """
+    # --- Input validation ---------------------------------------------------
+    if max_mismatches < 0:
+        raise ValueError(
+            f"max_mismatches must be non-negative, got {max_mismatches}."
+        )
+    if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size < 1:
+        raise ValueError(
+            f"chunk_size must be a positive integer, got {chunk_size!r}."
+        )
+
+    cleaned_genome = validate_dna_sequence(genome_sequence)
+    cleaned_guide = validate_dna_sequence(guide_sequence)
+
+    if not cleaned_guide:
+        raise ValueError("Guide sequence cannot be empty.")
+
+    genome_len = len(cleaned_genome)
+    guide_len = len(cleaned_guide)
+
+    if genome_len < guide_len:
+        return []
+
+    # --- Chunked alignment --------------------------------------------------
+    # Overlap = guide_len - 1 ensures every window that crosses a boundary is
+    # fully contained in at least one chunk.
+    overlap = guide_len - 1
+    all_matches: list[AlignmentMatch] = []
+    chunk_start = 0
+
+    while chunk_start < genome_len:
+        chunk_end = min(chunk_start + chunk_size + overlap, genome_len)
+        chunk = cleaned_genome[chunk_start:chunk_end]
+
+        # find_off_targets_gpu raises RuntimeError when CUDA is unavailable —
+        # let that propagate; never fall back to CPU silently.
+        chunk_matches = find_off_targets_gpu(chunk, cleaned_guide, max_mismatches)
+
+        for match in chunk_matches:
+            global_start = chunk_start + match.start
+
+            # Deduplication rule:
+            # A match whose global start position falls inside the overlap zone
+            # of a non-final chunk will be found again at the beginning of the
+            # next chunk — skip it here to avoid duplicates.
+            # Exception: always include all matches from the final chunk region.
+            is_last_chunk = chunk_end == genome_len
+            if global_start < chunk_start + chunk_size or is_last_chunk:
+                global_end = chunk_start + match.end
+                all_matches.append(
+                    AlignmentMatch(
+                        start=global_start,
+                        end=global_end,
+                        matched_sequence=match.matched_sequence,
+                        mismatch_count=match.mismatch_count,
+                        mismatch_positions=match.mismatch_positions,
+                    )
+                )
+
+        chunk_start += chunk_size
+
+    return all_matches
+
