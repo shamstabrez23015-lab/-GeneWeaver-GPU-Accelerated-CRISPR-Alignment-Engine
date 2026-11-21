@@ -382,3 +382,107 @@ def find_off_targets_gpu_chunked(
 
     return all_matches
 
+
+def get_gpu_memory_info() -> dict:
+    """Retrieve current GPU memory information from the active CUDA device.
+
+    Uses the Numba CUDA context API (``cuda.current_context().get_memory_info()``)
+    to query the actual free and total GPU memory.  Used memory is derived as
+    ``total - free`` — no values are fabricated or hardcoded.
+
+    Returns
+    -------
+    dict
+        A dictionary with the following keys:
+
+        ``available`` : bool
+            True when CUDA is reachable and memory info was retrieved.
+        ``free_bytes`` : int or None
+            Free GPU memory in bytes, or None when unavailable.
+        ``total_bytes`` : int or None
+            Total GPU memory in bytes, or None when unavailable.
+        ``used_bytes`` : int or None
+            Used GPU memory in bytes (total − free), or None when unavailable.
+        ``message`` : str
+            Human-readable status or error description.
+
+    Notes
+    -----
+    This function never raises — all error paths are caught and surfaced
+    through the returned dictionary so that callers can inspect status
+    without wrapping in a try/except.
+    """
+    _unavailable = {
+        "available": False,
+        "free_bytes": None,
+        "total_bytes": None,
+        "used_bytes": None,
+    }
+
+    # --- CUDA not importable ------------------------------------------------
+    if cuda is None:
+        return {
+            **_unavailable,
+            "message": (
+                "GPU memory information is unavailable: "
+                "the Numba CUDA package could not be imported."
+            ),
+        }
+
+    # --- CUDA present but no device -----------------------------------------
+    try:
+        cuda_present = cuda.is_available()
+    except Exception as exc:
+        return {
+            **_unavailable,
+            "message": (
+                f"GPU memory information is unavailable: "
+                f"CUDA availability check failed ({exc})."
+            ),
+        }
+
+    if not cuda_present:
+        return {
+            **_unavailable,
+            "message": (
+                "GPU memory information is unavailable: "
+                "no compatible CUDA device was detected."
+            ),
+        }
+
+    # --- Retrieve memory info from CUDA context -----------------------------
+    try:
+        context = cuda.current_context()
+        mem_info = context.get_memory_info()
+
+        # Numba ≥ 0.54 returns a named tuple (free, total); older versions
+        # may return a plain tuple — handle both by index.
+        if hasattr(mem_info, "free"):
+            free_bytes = int(mem_info.free)
+            total_bytes = int(mem_info.total)
+        else:
+            free_bytes = int(mem_info[0])
+            total_bytes = int(mem_info[1])
+
+        used_bytes = total_bytes - free_bytes
+
+        return {
+            "available": True,
+            "free_bytes": free_bytes,
+            "total_bytes": total_bytes,
+            "used_bytes": used_bytes,
+            "message": (
+                f"GPU memory info retrieved successfully: "
+                f"{free_bytes:,} bytes free of {total_bytes:,} bytes total."
+            ),
+        }
+
+    except Exception as exc:
+        return {
+            **_unavailable,
+            "message": (
+                f"GPU memory information is unavailable: "
+                f"failed to retrieve memory info from CUDA context ({exc})."
+            ),
+        }
+

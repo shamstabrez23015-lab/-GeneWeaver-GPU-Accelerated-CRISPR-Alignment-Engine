@@ -17,6 +17,7 @@ from src.cuda_alignment import (
     encode_sequence,
     find_off_targets_gpu,
     find_off_targets_gpu_chunked,
+    get_gpu_memory_info,
     is_cuda_available,
 )
 from src.models import AlignmentMatch
@@ -520,4 +521,273 @@ class TestChunkedGpuAlignment:
         starts = sorted(m.start for m in result)
         assert starts == [0, 4]
         assert all(m.mismatch_count == 0 for m in result)
+
+
+# ---------------------------------------------------------------------------
+# Day 8 – GPU Memory Detection and Monitoring Tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetGpuMemoryInfo:
+    """Tests for get_gpu_memory_info() (Day 8)."""
+
+    # ------------------------------------------------------------------
+    # Required dictionary fields
+    # ------------------------------------------------------------------
+
+    def test_required_fields_present_when_unavailable(self):
+        """All five required keys are present even when CUDA is unavailable."""
+        with patch("src.cuda_alignment.cuda", None):
+            info = get_gpu_memory_info()
+        required = {"available", "free_bytes", "total_bytes", "used_bytes", "message"}
+        assert required.issubset(info.keys()), f"Missing keys: {required - info.keys()}"
+
+    def test_required_fields_present_when_available(self):
+        """All five required keys are present when CUDA reports success."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_mem = MagicMock()
+        mock_mem.free = 4_000_000_000
+        mock_mem.total = 8_000_000_000
+        mock_cuda.current_context.return_value.get_memory_info.return_value = mock_mem
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        required = {"available", "free_bytes", "total_bytes", "used_bytes", "message"}
+        assert required.issubset(info.keys()), f"Missing keys: {required - info.keys()}"
+
+    # ------------------------------------------------------------------
+    # CUDA unavailable paths
+    # ------------------------------------------------------------------
+
+    def test_cuda_none_returns_unavailable(self):
+        """When the cuda module is None (not importable), available must be False."""
+        with patch("src.cuda_alignment.cuda", None):
+            info = get_gpu_memory_info()
+        assert info["available"] is False
+        assert info["free_bytes"] is None
+        assert info["total_bytes"] is None
+        assert info["used_bytes"] is None
+        assert isinstance(info["message"], str)
+        assert len(info["message"]) > 0
+
+    def test_no_cuda_device_detected(self):
+        """When cuda.is_available() returns False, available must be False."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = False
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["available"] is False
+        assert info["free_bytes"] is None
+        assert info["total_bytes"] is None
+        assert info["used_bytes"] is None
+        assert "unavailable" in info["message"].lower()
+
+    def test_cuda_is_available_raises_exception(self):
+        """When cuda.is_available() raises, available must be False and not crash."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.side_effect = RuntimeError("CUDA driver error")
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["available"] is False
+        assert info["free_bytes"] is None
+        assert "unavailable" in info["message"].lower()
+
+    def test_missing_cuda_package_message(self):
+        """When CUDA is None (not importable), message must mention the import failure."""
+        with patch("src.cuda_alignment.cuda", None):
+            info = get_gpu_memory_info()
+        assert "unavailable" in info["message"].lower()
+
+    # ------------------------------------------------------------------
+    # CUDA available — successful memory retrieval
+    # ------------------------------------------------------------------
+
+    def test_correct_free_memory(self):
+        """free_bytes must match the value reported by get_memory_info()."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_mem = MagicMock()
+        mock_mem.free = 3_221_225_472   # 3 GiB
+        mock_mem.total = 8_589_934_592  # 8 GiB
+        mock_cuda.current_context.return_value.get_memory_info.return_value = mock_mem
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["free_bytes"] == 3_221_225_472
+
+    def test_correct_total_memory(self):
+        """total_bytes must match the value reported by get_memory_info()."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_mem = MagicMock()
+        mock_mem.free = 3_221_225_472
+        mock_mem.total = 8_589_934_592
+        mock_cuda.current_context.return_value.get_memory_info.return_value = mock_mem
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["total_bytes"] == 8_589_934_592
+
+    def test_correct_used_memory_calculation(self):
+        """used_bytes must equal total_bytes minus free_bytes — no fabrication."""
+        free = 2_147_483_648   # 2 GiB
+        total = 8_589_934_592  # 8 GiB
+        expected_used = total - free
+
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_mem = MagicMock()
+        mock_mem.free = free
+        mock_mem.total = total
+        mock_cuda.current_context.return_value.get_memory_info.return_value = mock_mem
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["used_bytes"] == expected_used
+
+    def test_available_true_on_success(self):
+        """available must be True when memory info is retrieved successfully."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_mem = MagicMock()
+        mock_mem.free = 1_000_000_000
+        mock_mem.total = 4_000_000_000
+        mock_cuda.current_context.return_value.get_memory_info.return_value = mock_mem
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["available"] is True
+
+    def test_message_non_empty_on_success(self):
+        """message must be a non-empty string when memory info succeeds."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_mem = MagicMock()
+        mock_mem.free = 500_000_000
+        mock_mem.total = 2_000_000_000
+        mock_cuda.current_context.return_value.get_memory_info.return_value = mock_mem
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert isinstance(info["message"], str)
+        assert len(info["message"]) > 0
+
+    # ------------------------------------------------------------------
+    # Tuple-style memory info (older Numba versions without named fields)
+    # ------------------------------------------------------------------
+
+    def test_plain_tuple_memory_info(self):
+        """get_memory_info() returning a plain tuple (free, total) is handled correctly."""
+        free = 1_073_741_824   # 1 GiB
+        total = 4_294_967_296  # 4 GiB
+
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        # Return a plain tuple instead of a named tuple
+        mock_cuda.current_context.return_value.get_memory_info.return_value = (free, total)
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["available"] is True
+        assert info["free_bytes"] == free
+        assert info["total_bytes"] == total
+        assert info["used_bytes"] == total - free
+
+    # ------------------------------------------------------------------
+    # CUDA context errors
+    # ------------------------------------------------------------------
+
+    def test_context_retrieval_error(self):
+        """When cuda.current_context() raises, available must be False."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_cuda.current_context.side_effect = Exception("No active CUDA context")
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["available"] is False
+        assert info["free_bytes"] is None
+        assert "unavailable" in info["message"].lower()
+
+    def test_get_memory_info_raises(self):
+        """When get_memory_info() raises, available must be False and not crash."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_cuda.current_context.return_value.get_memory_info.side_effect = (
+            RuntimeError("CUDA out of memory")
+        )
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert info["available"] is False
+        assert info["total_bytes"] is None
+        assert "unavailable" in info["message"].lower()
+
+    def test_function_never_raises(self):
+        """get_gpu_memory_info() must never propagate an exception to callers."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.side_effect = Exception("catastrophic CUDA failure")
+
+        # Must not raise anything
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert isinstance(info, dict)
+
+    # ------------------------------------------------------------------
+    # Memory values are integers (not strings or floats)
+    # ------------------------------------------------------------------
+
+    def test_memory_values_are_integers(self):
+        """free_bytes, total_bytes and used_bytes must all be int when available."""
+        mock_cuda = MagicMock()
+        mock_cuda.is_available.return_value = True
+        mock_mem = MagicMock()
+        mock_mem.free = 2_000_000_000
+        mock_mem.total = 8_000_000_000
+        mock_cuda.current_context.return_value.get_memory_info.return_value = mock_mem
+
+        with patch("src.cuda_alignment.cuda", mock_cuda):
+            info = get_gpu_memory_info()
+
+        assert isinstance(info["free_bytes"], int)
+        assert isinstance(info["total_bytes"], int)
+        assert isinstance(info["used_bytes"], int)
+
+    def test_memory_values_none_when_unavailable(self):
+        """free_bytes, total_bytes and used_bytes must all be None when unavailable."""
+        with patch("src.cuda_alignment.cuda", None):
+            info = get_gpu_memory_info()
+
+        assert info["free_bytes"] is None
+        assert info["total_bytes"] is None
+        assert info["used_bytes"] is None
+
+    # ------------------------------------------------------------------
+    # Real hardware test (skipped when no CUDA device present)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.skipif(not is_cuda_available(), reason="NVIDIA CUDA GPU not available")
+    def test_real_gpu_memory_info(self):
+        """Real GPU: memory info values are positive integers and used + free == total."""
+        info = get_gpu_memory_info()
+        assert info["available"] is True
+        assert isinstance(info["free_bytes"], int) and info["free_bytes"] >= 0
+        assert isinstance(info["total_bytes"], int) and info["total_bytes"] > 0
+        assert isinstance(info["used_bytes"], int) and info["used_bytes"] >= 0
+        assert info["free_bytes"] + info["used_bytes"] == info["total_bytes"]
 
