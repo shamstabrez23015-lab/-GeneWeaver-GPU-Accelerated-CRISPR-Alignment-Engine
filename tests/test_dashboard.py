@@ -1,5 +1,5 @@
 """
-Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, Day 3, Day 4, Day 5, Day 6, and Day 7).
+Tests for the GeneWeaver terminal dashboard (Day 1, Day 2, Day 3, Day 4, Day 5, Day 6, Day 7, and Day 8).
 """
 
 from __future__ import annotations
@@ -15,10 +15,12 @@ from src.dashboard import (
     DEMO_LABEL_TEXT,
     BenchmarkResultsPanel,
     GeneWeaverApp,
+    GpuMemoryPanel,
     GpuStatusPanel,
     ProcessingInfoPanel,
     ProjectStatusPanel,
     ResultsPanel,
+    format_bytes,
 )
 
 
@@ -1568,3 +1570,501 @@ def test_load_demo_results_does_not_populate_benchmark_panel() -> None:
             assert "Not run" in str(sta_w.render())
 
     _run(_inner())
+
+
+# =============================================================================
+# Day 8 Tests: GPU Memory Dashboard Integration
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Sample mock values — manually crafted for testing purposes only.
+# These do NOT represent real GPU hardware measurements.
+# ---------------------------------------------------------------------------
+_MOCK_TOTAL_BYTES_8GB = 8 * 1024 * 1024 * 1024       # 8 GB mock test value
+_MOCK_FREE_BYTES_6GB = 6 * 1024 * 1024 * 1024        # 6 GB mock test value
+_MOCK_USED_BYTES_2GB = 2 * 1024 * 1024 * 1024        # 2 GB mock expected used value
+
+_MOCK_TOTAL_BYTES_16GB = 16 * 1024 * 1024 * 1024     # 16 GB mock test value
+_MOCK_FREE_BYTES_10GB = 10 * 1024 * 1024 * 1024      # 10 GB mock test value
+_MOCK_USED_BYTES_6GB = 6 * 1024 * 1024 * 1024        # 6 GB mock expected used value
+
+_MOCK_TOTAL_BYTES_500MB = 500 * 1024 * 1024          # 500 MB mock test value
+_MOCK_FREE_BYTES_200MB = 200 * 1024 * 1024           # 200 MB mock test value
+_MOCK_USED_BYTES_300MB = 300 * 1024 * 1024           # 300 MB mock expected used value
+
+
+# ---------------------------------------------------------------------------
+# Structure and panel tests — no live app needed
+# ---------------------------------------------------------------------------
+
+
+def test_gpu_memory_panel_can_be_instantiated() -> None:
+    """Verify GpuMemoryPanel can be instantiated independently."""
+    panel = GpuMemoryPanel()
+    assert panel is not None
+    assert panel.border_title == "GPU Memory"
+
+
+def test_gpu_memory_panel_initial_display() -> None:
+    """Verify GPU memory panel widgets initially read 'Not checked' and 'Not available'."""
+    panel = GpuMemoryPanel()
+    assert "Not checked" in str(panel.memory_status_widget.render())
+    assert "Not available" in str(panel.total_memory_widget.render())
+    assert "Not available" in str(panel.used_memory_widget.render())
+    assert "Not available" in str(panel.free_memory_widget.render())
+
+
+def test_gpu_memory_panel_compose_has_stable_ids() -> None:
+    """Verify GpuMemoryPanel yields widgets with the required stable IDs."""
+    panel = GpuMemoryPanel()
+    composed = {w.id: w for w in panel.compose() if getattr(w, "id", None)}
+    assert "gpu-memory-status" in composed
+    assert "gpu-memory-total" in composed
+    assert "gpu-memory-used" in composed
+    assert "gpu-memory-free" in composed
+
+
+def test_app_has_gpu_memory_panel() -> None:
+    """Verify GeneWeaverApp creates a GpuMemoryPanel instance."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "gpu_memory_panel")
+    assert isinstance(app.gpu_memory_panel, GpuMemoryPanel)
+
+
+def test_update_gpu_memory_method_exists() -> None:
+    """Verify GeneWeaverApp exposes update_gpu_memory as a callable."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "update_gpu_memory")
+    assert callable(app.update_gpu_memory)
+
+
+# ---------------------------------------------------------------------------
+# Initial display tests (app-level query_one)
+# ---------------------------------------------------------------------------
+
+
+def test_initial_gpu_memory_display() -> None:
+    """Verify all GPU memory widgets initially display 'Not checked' and 'Not available'."""
+    app = GeneWeaverApp()
+    status_w = app.query_one("#gpu-memory-status")
+    total_w = app.query_one("#gpu-memory-total")
+    used_w = app.query_one("#gpu-memory-used")
+    free_w = app.query_one("#gpu-memory-free")
+
+    assert "Not checked" in str(status_w.render())
+    assert "Not available" in str(total_w.render())
+    assert "Not available" in str(used_w.render())
+    assert "Not available" in str(free_w.render())
+
+    assert app.gpu_memory_status == "Not checked"
+    assert app.gpu_memory_total is None
+    assert app.gpu_memory_used is None
+    assert app.gpu_memory_free is None
+
+
+# ---------------------------------------------------------------------------
+# Memory updates, calculations, and formatting
+# ---------------------------------------------------------------------------
+
+
+def test_updating_total_gpu_memory() -> None:
+    """Verify updating total GPU memory formats and displays correctly."""
+    app = GeneWeaverApp()
+    app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, _MOCK_TOTAL_BYTES_8GB)
+
+    total_w = app.query_one("#gpu-memory-total")
+    assert "8.00 GB" in str(total_w.render())
+    assert app.gpu_memory_total == _MOCK_TOTAL_BYTES_8GB
+
+
+def test_updating_free_gpu_memory() -> None:
+    """Verify updating free GPU memory formats and displays correctly."""
+    app = GeneWeaverApp()
+    app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, _MOCK_TOTAL_BYTES_8GB)
+
+    free_w = app.query_one("#gpu-memory-free")
+    assert "6.00 GB" in str(free_w.render())
+    assert app.gpu_memory_free == _MOCK_FREE_BYTES_6GB
+
+
+def test_correct_used_memory_calculation() -> None:
+    """Verify used GPU memory is calculated correctly as total minus free."""
+    app = GeneWeaverApp()
+
+    # Case 1: 8 GB total - 6 GB free = 2 GB used
+    app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, _MOCK_TOTAL_BYTES_8GB)
+    used_w = app.query_one("#gpu-memory-used")
+    assert "2.00 GB" in str(used_w.render())
+    assert app.gpu_memory_used == _MOCK_USED_BYTES_2GB
+
+    # Case 2: 500 MB total - 200 MB free = 300 MB used
+    app.update_gpu_memory(_MOCK_FREE_BYTES_200MB, _MOCK_TOTAL_BYTES_500MB)
+    assert "300.00 MB" in str(used_w.render())
+    assert app.gpu_memory_used == _MOCK_USED_BYTES_300MB
+
+    # Case 3: 8 GB total - 8 GB free = 0 bytes used
+    app.update_gpu_memory(_MOCK_TOTAL_BYTES_8GB, _MOCK_TOTAL_BYTES_8GB)
+    assert "0 B" in str(used_w.render())
+    assert app.gpu_memory_used == 0
+
+
+def test_update_gpu_memory_sets_status_available() -> None:
+    """Verify updating GPU memory sets GPU memory status to 'Available'."""
+    app = GeneWeaverApp()
+    app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, _MOCK_TOTAL_BYTES_8GB)
+
+    status_w = app.query_one("#gpu-memory-status")
+    assert "Available" in str(status_w.render())
+    assert app.gpu_memory_status == "Available"
+
+
+def test_human_readable_memory_formatting() -> None:
+    """Verify format_bytes utility and widget display use appropriate units such as MB or GB."""
+    # Direct utility test across unit scales
+    assert format_bytes(0) == "0 B"
+    assert format_bytes(512) == "512 B"
+    assert format_bytes(1024) == "1.00 KB"
+    assert format_bytes(1536) == "1.50 KB"
+    assert format_bytes(1024 * 1024) == "1.00 MB"
+    assert format_bytes(500 * 1024 * 1024) == "500.00 MB"
+    assert format_bytes(1024 * 1024 * 1024) == "1.00 GB"
+    assert format_bytes(8 * 1024 * 1024 * 1024) == "8.00 GB"
+    assert format_bytes(24 * 1024 * 1024 * 1024) == "24.00 GB"
+    assert format_bytes(1024 * 1024 * 1024 * 1024) == "1.00 TB"
+
+    # In-dashboard formatting check
+    app = GeneWeaverApp()
+    app.update_gpu_memory(_MOCK_FREE_BYTES_200MB, _MOCK_TOTAL_BYTES_500MB)
+    assert "MB" in str(app.query_one("#gpu-memory-total").render())
+    assert "MB" in str(app.query_one("#gpu-memory-free").render())
+    assert "MB" in str(app.query_one("#gpu-memory-used").render())
+
+    app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, _MOCK_TOTAL_BYTES_8GB)
+    assert "GB" in str(app.query_one("#gpu-memory-total").render())
+    assert "GB" in str(app.query_one("#gpu-memory-free").render())
+    assert "GB" in str(app.query_one("#gpu-memory-used").render())
+
+
+# ---------------------------------------------------------------------------
+# GPU unavailable case
+# ---------------------------------------------------------------------------
+
+
+def test_gpu_unavailable_case() -> None:
+    """Verify update_gpu_memory(None, None) displays 'Not available' and status 'Unavailable'."""
+    app = GeneWeaverApp()
+
+    # Pre-populate with valid mock values first to ensure it actually updates to unavailable
+    app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, _MOCK_TOTAL_BYTES_8GB)
+    assert app.gpu_memory_status == "Available"
+
+    # Now transition to unavailable
+    app.update_gpu_memory(None, None)
+
+    status_w = app.query_one("#gpu-memory-status")
+    total_w = app.query_one("#gpu-memory-total")
+    used_w = app.query_one("#gpu-memory-used")
+    free_w = app.query_one("#gpu-memory-free")
+
+    assert "Unavailable" in str(status_w.render())
+    assert "Not available" in str(total_w.render())
+    assert "Not available" in str(used_w.render())
+    assert "Not available" in str(free_w.render())
+
+    assert app.gpu_memory_status == "Unavailable"
+    assert app.gpu_memory_total is None
+    assert app.gpu_memory_used is None
+    assert app.gpu_memory_free is None
+
+    # Must NOT fabricate numerical byte strings
+    assert "GB" not in str(total_w.render())
+    assert "GB" not in str(free_w.render())
+    assert "GB" not in str(used_w.render())
+
+
+# ---------------------------------------------------------------------------
+# Input validation tests (ValueError cases)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("neg_free", [-1, -1024, -1048576, -8589934592])
+def test_reject_negative_free_memory(neg_free: int) -> None:
+    """Verify negative free memory values raise ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError, match="negative"):
+        app.update_gpu_memory(neg_free, _MOCK_TOTAL_BYTES_8GB)
+
+
+@pytest.mark.parametrize("neg_total", [-1, -1024, -1048576, -8589934592])
+def test_reject_negative_total_memory(neg_total: int) -> None:
+    """Verify negative total memory values raise ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError, match="negative"):
+        app.update_gpu_memory(1024, neg_total)
+
+
+def test_reject_both_negative_memory_values() -> None:
+    """Verify both memory values negative raises ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError, match="negative"):
+        app.update_gpu_memory(-1024, -2048)
+
+
+def test_reject_total_memory_equal_to_zero() -> None:
+    """Verify total memory equal to zero raises ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError, match="zero"):
+        app.update_gpu_memory(0, 0)
+
+
+def test_reject_free_memory_greater_than_total() -> None:
+    """Verify free memory greater than total memory raises ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError, match="greater than total"):
+        app.update_gpu_memory(_MOCK_TOTAL_BYTES_8GB + 1024, _MOCK_TOTAL_BYTES_8GB)
+
+
+def test_reject_only_one_missing_memory_value() -> None:
+    """Verify providing only one None value raises ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError, match="Both free_bytes and total_bytes"):
+        app.update_gpu_memory(None, _MOCK_TOTAL_BYTES_8GB)
+
+    with pytest.raises(ValueError, match="Both free_bytes and total_bytes"):
+        app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, None)
+
+
+@pytest.mark.parametrize(
+    "invalid_free, invalid_total",
+    [
+        ("6000000000", _MOCK_TOTAL_BYTES_8GB),
+        (_MOCK_FREE_BYTES_6GB, "8000000000"),
+        (True, _MOCK_TOTAL_BYTES_8GB),
+        (_MOCK_FREE_BYTES_6GB, False),
+        (6442450944.5, _MOCK_TOTAL_BYTES_8GB),
+        (_MOCK_FREE_BYTES_6GB, 8589934592.0),
+        ([1024], _MOCK_TOTAL_BYTES_8GB),
+        (_MOCK_FREE_BYTES_6GB, {"total": 8589934592}),
+    ],
+)
+def test_reject_invalid_memory_types(invalid_free, invalid_total) -> None:
+    """Verify non-integer/boolean memory types raise ValueError."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_gpu_memory(invalid_free, invalid_total)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Multiple updates and lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_updating_memory_information_multiple_times() -> None:
+    """Verify update_gpu_memory can be called multiple times correctly replacing values."""
+    app = GeneWeaverApp()
+
+    # 1. First update: 8GB total, 6GB free -> 2GB used
+    app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, _MOCK_TOTAL_BYTES_8GB)
+    assert app.gpu_memory_status == "Available"
+    assert "8.00 GB" in str(app.query_one("#gpu-memory-total").render())
+    assert "2.00 GB" in str(app.query_one("#gpu-memory-used").render())
+    assert "6.00 GB" in str(app.query_one("#gpu-memory-free").render())
+
+    # 2. Second update: 16GB total, 10GB free -> 6GB used
+    app.update_gpu_memory(_MOCK_FREE_BYTES_10GB, _MOCK_TOTAL_BYTES_16GB)
+    assert app.gpu_memory_status == "Available"
+    assert "16.00 GB" in str(app.query_one("#gpu-memory-total").render())
+    assert "6.00 GB" in str(app.query_one("#gpu-memory-used").render())
+    assert "10.00 GB" in str(app.query_one("#gpu-memory-free").render())
+
+    # 3. Third update: Unavailable
+    app.update_gpu_memory(None, None)
+    assert app.gpu_memory_status == "Unavailable"
+    assert "Not available" in str(app.query_one("#gpu-memory-total").render())
+    assert "Not available" in str(app.query_one("#gpu-memory-used").render())
+    assert "Not available" in str(app.query_one("#gpu-memory-free").render())
+
+    # 4. Fourth update: 500MB total, 200MB free -> 300MB used
+    app.update_gpu_memory(_MOCK_FREE_BYTES_200MB, _MOCK_TOTAL_BYTES_500MB)
+    assert app.gpu_memory_status == "Available"
+    assert "500.00 MB" in str(app.query_one("#gpu-memory-total").render())
+    assert "300.00 MB" in str(app.query_one("#gpu-memory-used").render())
+    assert "200.00 MB" in str(app.query_one("#gpu-memory-free").render())
+
+
+# ---------------------------------------------------------------------------
+# Dashboard behavior / Isolation / Anti-fabrication tests
+# ---------------------------------------------------------------------------
+
+
+def test_gpu_memory_not_auto_generated_on_startup() -> None:
+    """Verify GPU memory is never fabricated or auto-generated on startup."""
+    app = GeneWeaverApp()
+    assert app.gpu_memory_status == "Not checked"
+    status_w = app.query_one("#gpu-memory-status")
+    assert "Not checked" in str(status_w.render())
+    assert "Available" not in str(status_w.render())
+
+    for widget_id in ("#gpu-memory-total", "#gpu-memory-used", "#gpu-memory-free"):
+        w = app.query_one(widget_id)
+        assert "Not available" in str(w.render())
+
+
+def test_load_demo_results_does_not_affect_gpu_memory() -> None:
+    """Verify calling load_demo_results does NOT modify GPU memory values."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            app.load_demo_results()
+
+            status_w = app.query_one("#gpu-memory-status", Label)
+            total_w = app.query_one("#gpu-memory-total", Label)
+            used_w = app.query_one("#gpu-memory-used", Label)
+            free_w = app.query_one("#gpu-memory-free", Label)
+
+            assert "Not checked" in str(status_w.render())
+            assert "Not available" in str(total_w.render())
+            assert "Not available" in str(used_w.render())
+            assert "Not available" in str(free_w.render())
+    _run(_inner())
+
+
+def test_update_gpu_status_does_not_affect_gpu_memory() -> None:
+    """Verify update_gpu_status is completely independent of GPU memory section."""
+    app = GeneWeaverApp()
+    app.update_gpu_status("Available", device_name="NVIDIA GeForce RTX 4080")
+
+    gpu_status_w = app.query_one("#gpu-status")
+    assert "Available" in str(gpu_status_w.render())
+
+    # GPU memory section must remain untouched
+    mem_status_w = app.query_one("#gpu-memory-status")
+    assert "Not checked" in str(mem_status_w.render())
+    assert app.gpu_memory_status == "Not checked"
+
+
+def test_gpu_memory_widget_ids_do_not_collide() -> None:
+    """Verify GPU memory widget IDs do not collide with any existing dashboard IDs."""
+    app = GeneWeaverApp()
+    top_level = list(app.compose())
+
+    all_ids: list[str] = []
+
+    def collect_ids(widget) -> None:
+        if getattr(widget, "id", None):
+            all_ids.append(widget.id)
+        for child in getattr(widget, "_pending_children", []):
+            collect_ids(child)
+        if isinstance(
+            widget,
+            (
+                ProjectStatusPanel,
+                GpuStatusPanel,
+                GpuMemoryPanel,
+                ProcessingInfoPanel,
+                ResultsPanel,
+                BenchmarkResultsPanel,
+            ),
+        ):
+            for composed_child in widget.compose():
+                collect_ids(composed_child)
+
+    for w in top_level:
+        collect_ids(w)
+
+    assert "gpu-memory-status" in all_ids
+    assert "gpu-memory-total" in all_ids
+    assert "gpu-memory-used" in all_ids
+    assert "gpu-memory-free" in all_ids
+    assert len(all_ids) == len(set(all_ids)), f"Duplicate widget IDs: {all_ids}"
+
+
+# ---------------------------------------------------------------------------
+# Live running app test
+# ---------------------------------------------------------------------------
+
+
+def test_gpu_memory_in_running_app() -> None:
+    """Verify GPU memory updates and display behave correctly in a live running app."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            # Check initial state
+            status_w = app.query_one("#gpu-memory-status", Label)
+            total_w = app.query_one("#gpu-memory-total", Label)
+            used_w = app.query_one("#gpu-memory-used", Label)
+            free_w = app.query_one("#gpu-memory-free", Label)
+
+            assert "Not checked" in str(status_w.render())
+            assert "Not available" in str(total_w.render())
+            assert "Not available" in str(used_w.render())
+            assert "Not available" in str(free_w.render())
+
+            # Update with mock measurements
+            app.update_gpu_memory(_MOCK_FREE_BYTES_6GB, _MOCK_TOTAL_BYTES_8GB)
+            assert "Available" in str(status_w.render())
+            assert "8.00 GB" in str(total_w.render())
+            assert "2.00 GB" in str(used_w.render())
+            assert "6.00 GB" in str(free_w.render())
+
+            # Transition to unavailable
+            app.update_gpu_memory(None, None)
+            assert "Unavailable" in str(status_w.render())
+            assert "Not available" in str(total_w.render())
+            assert "Not available" in str(used_w.render())
+            assert "Not available" in str(free_w.render())
+
+    _run(_inner())
+
+
+def test_existing_dashboard_features_unaffected_by_gpu_memory_section() -> None:
+    """Verify all existing dashboard features work together with GPU memory section."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            # 1. Scan status
+            app.update_scan_status("Scanning")
+            assert app.scan_status == "Scanning"
+
+            # 2. Progress
+            app.update_scan_progress(80)
+            assert app.scan_progress == 80
+
+            # 3. Results table
+            app.update_alignment_results([_SAMPLE_RESULT_1])
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 1
+
+            # 4. GPU status panel
+            app.update_gpu_status("Available", device_name="NVIDIA RTX 4090")
+            gpu_w = app.query_one("#gpu-status", Label)
+            assert "Available" in str(gpu_w.render())
+
+            # 5. Benchmark results panel
+            app.update_benchmark_results(_SAMPLE_BENCH_GPU_AVAILABLE)
+            cpu_bench = app.query_one("#cpu-benchmark-time", Label)
+            assert "200.000 ms" in str(cpu_bench.render())
+
+            # 6. GPU memory section
+            app.update_gpu_memory(_MOCK_FREE_BYTES_10GB, _MOCK_TOTAL_BYTES_16GB)
+            mem_status_w = app.query_one("#gpu-memory-status", Label)
+            mem_total_w = app.query_one("#gpu-memory-total", Label)
+            mem_used_w = app.query_one("#gpu-memory-used", Label)
+            mem_free_w = app.query_one("#gpu-memory-free", Label)
+
+            assert "Available" in str(mem_status_w.render())
+            assert "16.00 GB" in str(mem_total_w.render())
+            assert "6.00 GB" in str(mem_used_w.render())
+            assert "10.00 GB" in str(mem_free_w.render())
+
+            # 7. Demo mode
+            app.load_demo_results()
+            assert app.is_demo_mode is True
+            demo_lbl = app.query_one("#demo-data-label", Label)
+            assert demo_lbl.display is True
+
+            # Check that GPU memory was not overwritten by demo mode
+            assert "16.00 GB" in str(mem_total_w.render())
+
+    _run(_inner())
+

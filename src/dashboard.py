@@ -1,12 +1,12 @@
 """
 GeneWeaver: GPU-Accelerated CRISPR Alignment Engine
-Terminal Dashboard (Day 7)
+Terminal Dashboard (Day 8)
 
 A clean, modular terminal interface built with Textual with a structured
-layout including a Header, Sidebar (system and engine status), Main Content
+layout including a Header, Sidebar (system, GPU status, and GPU memory), Main Content
 area (processing info, progress bar at 0%, mismatch counts, alignment results,
 benchmark results), and Footer. Provides dynamic update capabilities for scan
-status, progress, alignment results DataTable, and benchmark results.
+status, progress, alignment results DataTable, benchmark results, and GPU memory.
 """
 
 from __future__ import annotations
@@ -148,6 +148,94 @@ class GpuStatusPanel(Container):
                 return self.gpu_status_widget
             if selector == "#gpu-device" and hasattr(self, "gpu_device_widget"):
                 return self.gpu_device_widget
+            raise
+
+
+def format_bytes(num_bytes: int) -> str:
+    """Format byte counts into human-readable strings with appropriate units (B, KB, MB, GB, TB).
+
+    Uses binary prefixes (1024 bytes = 1 KB).
+    """
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    units = ["KB", "MB", "GB", "TB", "PB"]
+    val = float(num_bytes)
+    for unit in units:
+        val /= 1024.0
+        if val < 1024.0 or unit == units[-1]:
+            return f"{val:.2f} {unit}"
+    return f"{val:.2f} PB"
+
+
+class GpuMemoryPanel(Container):
+    """Sidebar panel displaying GPU memory utilization and capacity."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.border_title = "GPU Memory"
+        self._memory_status: str = "Not checked"
+        self._total_memory: str = "Not available"
+        self._used_memory: str = "Not available"
+        self._free_memory: str = "Not available"
+
+        self.memory_status_widget = Label(
+            f"[b]GPU Memory Status:[/b] {self._memory_status}",
+            id="gpu-memory-status",
+            classes="stat-line",
+        )
+        self.total_memory_widget = Label(
+            f"[b]Total GPU Memory:[/b] {self._total_memory}",
+            id="gpu-memory-total",
+            classes="stat-line",
+        )
+        self.used_memory_widget = Label(
+            f"[b]Used GPU Memory:[/b] {self._used_memory}",
+            id="gpu-memory-used",
+            classes="stat-line",
+        )
+        self.free_memory_widget = Label(
+            f"[b]Free GPU Memory:[/b] {self._free_memory}",
+            id="gpu-memory-free",
+            classes="stat-line",
+        )
+
+    def compose(self) -> ComposeResult:
+        yield self.memory_status_widget
+        yield self.total_memory_widget
+        yield self.used_memory_widget
+        yield self.free_memory_widget
+
+    def update_memory(
+        self,
+        status: str,
+        total: str = "Not available",
+        used: str = "Not available",
+        free: str = "Not available",
+    ) -> None:
+        """Update GPU memory labels."""
+        self._memory_status = status
+        self._total_memory = total
+        self._used_memory = used
+        self._free_memory = free
+
+        self.memory_status_widget.update(f"[b]GPU Memory Status:[/b] {status}")
+        self.total_memory_widget.update(f"[b]Total GPU Memory:[/b] {total}")
+        self.used_memory_widget.update(f"[b]Used GPU Memory:[/b] {used}")
+        self.free_memory_widget.update(f"[b]Free GPU Memory:[/b] {free}")
+
+    def query_one(self, selector, *args, **kwargs):
+        """Query for a child widget with fallback for unmounted tests."""
+        try:
+            return super().query_one(selector, *args, **kwargs)
+        except Exception:
+            mapping = {
+                "#gpu-memory-status": self.memory_status_widget,
+                "#gpu-memory-total": self.total_memory_widget,
+                "#gpu-memory-used": self.used_memory_widget,
+                "#gpu-memory-free": self.free_memory_widget,
+            }
+            if selector in mapping:
+                return mapping[selector]
             raise
 
 
@@ -364,6 +452,16 @@ class GeneWeaverApp(App):
         border: round $success;
         background: $panel;
         padding: 1 1;
+        margin-bottom: 1;
+    }
+
+    GpuMemoryPanel {
+        width: 100%;
+        height: auto;
+        min-height: 8;
+        border: round $accent;
+        background: $panel;
+        padding: 1 1;
     }
 
     ProcessingInfoPanel {
@@ -431,8 +529,13 @@ class GeneWeaverApp(App):
         self.scan_status: str = "Not started"
         self.scan_progress: int = 0
         self.is_demo_mode: bool = False
+        self.gpu_memory_status: str = "Not checked"
+        self.gpu_memory_total: int | None = None
+        self.gpu_memory_used: int | None = None
+        self.gpu_memory_free: int | None = None
         self.project_status_panel = ProjectStatusPanel(id="project-status-panel")
         self.gpu_status_panel = GpuStatusPanel(id="gpu-status-panel")
+        self.gpu_memory_panel = GpuMemoryPanel(id="gpu-memory-panel")
         self.processing_info_panel = ProcessingInfoPanel(id="processing-info-panel")
         self.results_panel = ResultsPanel(id="results-panel")
         self.benchmark_results_panel = BenchmarkResultsPanel(id="benchmark-results-panel")
@@ -461,6 +564,7 @@ class GeneWeaverApp(App):
             Container(
                 self.project_status_panel,
                 self.gpu_status_panel,
+                self.gpu_memory_panel,
                 id="sidebar",
             ),
             Container(
@@ -504,6 +608,16 @@ class GeneWeaverApp(App):
                 return self.gpu_status_panel.gpu_status_widget
             if selector == "#gpu-device" and hasattr(self, "gpu_status_panel"):
                 return self.gpu_status_panel.gpu_device_widget
+            if selector == "#gpu-memory-panel" and hasattr(self, "gpu_memory_panel"):
+                return self.gpu_memory_panel
+            if selector == "#gpu-memory-status" and hasattr(self, "gpu_memory_panel"):
+                return self.gpu_memory_panel.memory_status_widget
+            if selector == "#gpu-memory-total" and hasattr(self, "gpu_memory_panel"):
+                return self.gpu_memory_panel.total_memory_widget
+            if selector == "#gpu-memory-used" and hasattr(self, "gpu_memory_panel"):
+                return self.gpu_memory_panel.used_memory_widget
+            if selector == "#gpu-memory-free" and hasattr(self, "gpu_memory_panel"):
+                return self.gpu_memory_panel.free_memory_widget
             if selector == "#benchmark-results-panel" and hasattr(self, "benchmark_results_panel"):
                 return self.benchmark_results_panel
             if selector == "#cpu-benchmark-time" and hasattr(self, "benchmark_results_panel"):
@@ -580,6 +694,96 @@ class GeneWeaverApp(App):
                 device_widget.update(f"[b]GPU Device:[/b] {display_device}")
             except Exception:
                 pass
+
+    def update_gpu_memory(
+        self,
+        free_bytes: int | None,
+        total_bytes: int | None,
+    ) -> None:
+        """Update GPU memory utilization and capacity information.
+
+        Args:
+            free_bytes:  Free GPU memory in bytes, or None if unavailable.
+            total_bytes: Total GPU memory in bytes, or None if unavailable.
+
+        Raises:
+            ValueError: If only one of free_bytes or total_bytes is None.
+            ValueError: If byte values are negative.
+            ValueError: If total_bytes is zero.
+            ValueError: If free_bytes is greater than total_bytes.
+            ValueError: If byte values are invalid types (e.g. bool, str, float).
+        """
+        if free_bytes is None and total_bytes is None:
+            status = "Unavailable"
+            total_str = "Not available"
+            used_str = "Not available"
+            free_str = "Not available"
+            self.gpu_memory_status = status
+            self.gpu_memory_total = None
+            self.gpu_memory_used = None
+            self.gpu_memory_free = None
+        elif free_bytes is None or total_bytes is None:
+            raise ValueError(
+                "Both free_bytes and total_bytes must be provided, or both must be None."
+            )
+        else:
+            if isinstance(free_bytes, bool) or isinstance(total_bytes, bool):
+                raise ValueError("Memory byte values cannot be boolean.")
+            if not isinstance(free_bytes, int) or not isinstance(total_bytes, int):
+                raise ValueError(
+                    f"Memory byte values must be integers, got {type(free_bytes).__name__} and {type(total_bytes).__name__}."
+                )
+            if free_bytes < 0 or total_bytes < 0:
+                raise ValueError("Memory values cannot be negative.")
+            if total_bytes == 0:
+                raise ValueError("Total GPU memory cannot be zero.")
+            if free_bytes > total_bytes:
+                raise ValueError(
+                    f"Free GPU memory ({free_bytes} bytes) cannot be greater than total GPU memory ({total_bytes} bytes)."
+                )
+
+            used_bytes = total_bytes - free_bytes
+            status = "Available"
+            total_str = format_bytes(total_bytes)
+            used_str = format_bytes(used_bytes)
+            free_str = format_bytes(free_bytes)
+
+            self.gpu_memory_status = status
+            self.gpu_memory_total = total_bytes
+            self.gpu_memory_used = used_bytes
+            self.gpu_memory_free = free_bytes
+
+        self.gpu_memory_panel.update_memory(
+            status=status,
+            total=total_str,
+            used=used_str,
+            free=free_str,
+        )
+
+        try:
+            self.query_one("#gpu-memory-status", Label).update(
+                f"[b]GPU Memory Status:[/b] {status}"
+            )
+        except Exception:
+            pass
+        try:
+            self.query_one("#gpu-memory-total", Label).update(
+                f"[b]Total GPU Memory:[/b] {total_str}"
+            )
+        except Exception:
+            pass
+        try:
+            self.query_one("#gpu-memory-used", Label).update(
+                f"[b]Used GPU Memory:[/b] {used_str}"
+            )
+        except Exception:
+            pass
+        try:
+            self.query_one("#gpu-memory-free", Label).update(
+                f"[b]Free GPU Memory:[/b] {free_str}"
+            )
+        except Exception:
+            pass
 
     def update_scan_status(self, status: str) -> None:
         """Update the scan status component.
