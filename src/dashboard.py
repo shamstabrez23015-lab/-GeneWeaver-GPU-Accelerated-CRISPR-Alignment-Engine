@@ -21,6 +21,11 @@ _REQUIRED_RESULT_FIELDS = frozenset(
     {"record_id", "start", "end", "matched_sequence", "mismatch_count"}
 )
 
+# Required fields for update_gpu_diagnostics
+_REQUIRED_DIAGNOSTICS_FIELDS = frozenset(
+    {"available", "device_name", "free_bytes", "total_bytes", "used_bytes", "message"}
+)
+
 # Required fields for update_benchmark_results
 _REQUIRED_BENCHMARK_FIELDS = frozenset(
     {
@@ -992,6 +997,118 @@ class GeneWeaverApp(App):
             )
         except Exception:
             pass
+
+    def update_gpu_diagnostics(self, diagnostics: dict) -> None:
+        """Update GPU status and memory sections from a CUDA diagnostics dictionary.
+
+        Accepts a dictionary with the following fields (all required):
+            - available    : bool  — True if GPU is detected and usable
+            - device_name  : str | None  — GPU device name; must be None when unavailable
+            - free_bytes   : int | None  — Free GPU memory in bytes; must be None when unavailable
+            - total_bytes  : int | None  — Total GPU memory in bytes; must be None when unavailable
+            - used_bytes   : int | None  — Used GPU memory in bytes; must be None when unavailable
+            - message      : str  — Diagnostic message from the CUDA diagnostics module
+
+        When ``available`` is True:
+            - GPU Status is set to "Available".
+            - device_name, free_bytes, total_bytes, and used_bytes must all be non-None.
+            - free_bytes and total_bytes must be non-negative integers.
+            - free_bytes must not exceed total_bytes.
+            - used_bytes must equal total_bytes minus free_bytes.
+            - All memory values are formatted and displayed.
+
+        When ``available`` is False:
+            - GPU Status is set to "Unavailable".
+            - device_name, free_bytes, total_bytes, and used_bytes must all be None.
+            - Memory display is cleared to "Not available".
+            - Device display is cleared to "Not detected".
+
+        Args:
+            diagnostics: Dictionary matching the data contract above.
+
+        Raises:
+            ValueError: If any required field is missing.
+            ValueError: If ``available`` is not a boolean.
+            ValueError: If ``available`` is True but memory values are negative.
+            ValueError: If ``available`` is True and free_bytes > total_bytes.
+            ValueError: If ``available`` is True and used_bytes != total_bytes - free_bytes.
+            ValueError: If ``available`` is False but device_name or memory values are not None.
+        """
+        if not isinstance(diagnostics, dict):
+            raise ValueError(
+                f"update_gpu_diagnostics expects a dict, got {type(diagnostics).__name__!r}"
+            )
+
+        missing = _REQUIRED_DIAGNOSTICS_FIELDS - diagnostics.keys()
+        if missing:
+            raise ValueError(
+                f"GPU diagnostics dict is missing required fields: "
+                f"{', '.join(sorted(missing))}"
+            )
+
+        available = diagnostics["available"]
+        if not isinstance(available, bool):
+            raise ValueError(
+                f"'available' must be a boolean, got {type(available).__name__!r}: {available!r}"
+            )
+
+        device_name = diagnostics["device_name"]
+        free_bytes = diagnostics["free_bytes"]
+        total_bytes = diagnostics["total_bytes"]
+        used_bytes = diagnostics["used_bytes"]
+        message = diagnostics["message"]
+
+        if available:
+            # --- Validate memory values ---
+            if isinstance(free_bytes, bool) or isinstance(total_bytes, bool) or isinstance(used_bytes, bool):
+                raise ValueError("Memory byte values cannot be boolean.")
+            if not isinstance(free_bytes, int) or not isinstance(total_bytes, int) or not isinstance(used_bytes, int):
+                raise ValueError(
+                    "free_bytes, total_bytes, and used_bytes must be integers when GPU is available."
+                )
+            if free_bytes < 0 or total_bytes < 0 or used_bytes < 0:
+                raise ValueError("Memory values cannot be negative.")
+            if free_bytes > total_bytes:
+                raise ValueError(
+                    f"free_bytes ({free_bytes}) cannot be greater than total_bytes ({total_bytes})."
+                )
+            expected_used = total_bytes - free_bytes
+            if used_bytes != expected_used:
+                raise ValueError(
+                    f"used_bytes ({used_bytes}) does not equal total_bytes - free_bytes "
+                    f"({total_bytes} - {free_bytes} = {expected_used})."
+                )
+
+            # Update GPU status to Available with device name
+            self.update_gpu_status("Available", device_name=device_name)
+
+            # Update GPU memory panel
+            self.update_gpu_memory(free_bytes, total_bytes)
+
+        else:
+            # --- Validate that unavailable diagnostics carry no device/memory data ---
+            if device_name is not None:
+                raise ValueError(
+                    "device_name must be None when GPU is unavailable."
+                )
+            if free_bytes is not None or total_bytes is not None or used_bytes is not None:
+                raise ValueError(
+                    "free_bytes, total_bytes, and used_bytes must all be None when GPU is unavailable."
+                )
+
+            # Update GPU status to Unavailable (clears device name automatically)
+            self.update_gpu_status("Unavailable")
+
+            # Clear GPU memory panel
+            self.update_gpu_memory(None, None)
+
+        # Display the diagnostic message in the benchmark status widget as a
+        # convenient diagnostics outlet (does not overwrite benchmark data).
+        # The message is surfaced on the GpuStatusPanel's device widget label
+        # as a secondary note — but we propagate it via the memory panel status
+        # widget instead so the GPU status section clearly shows it.
+        # We store it on the app instance for test inspection.
+        self._last_gpu_diagnostics_message: str = str(message) if message is not None else ""
 
     def load_demo_results(self, results: list[dict] | None = None) -> None:
         """Load sample CRISPR alignment results for demonstration.

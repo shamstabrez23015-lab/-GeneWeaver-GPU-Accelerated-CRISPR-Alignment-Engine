@@ -2068,3 +2068,463 @@ def test_existing_dashboard_features_unaffected_by_gpu_memory_section() -> None:
 
     _run(_inner())
 
+
+
+# =============================================================================
+# Day 9 Tests: GPU Diagnostics Integration
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Sample GPU diagnostics dictionaries — manually crafted for testing only.
+# These do NOT represent real GPU hardware measurements.
+# ---------------------------------------------------------------------------
+
+_SAMPLE_DIAG_AVAILABLE = {
+    "available": True,
+    "device_name": "NVIDIA GeForce RTX 9000 (SAMPLE)",   # sample name only
+    "free_bytes": 6 * 1024 * 1024 * 1024,                # 6 GB — sample value
+    "total_bytes": 8 * 1024 * 1024 * 1024,               # 8 GB — sample value
+    "used_bytes": 2 * 1024 * 1024 * 1024,                # 2 GB — sample value (total - free)
+    "message": "GPU detected and ready (sample diagnostic)",
+}
+
+_SAMPLE_DIAG_UNAVAILABLE = {
+    "available": False,
+    "device_name": None,
+    "free_bytes": None,
+    "total_bytes": None,
+    "used_bytes": None,
+    "message": "No GPU detected on this machine (sample diagnostic)",
+}
+
+_SAMPLE_DIAG_AVAILABLE_ALT = {
+    "available": True,
+    "device_name": "AMD Radeon RX 9700 (SAMPLE)",         # sample name only
+    "free_bytes": 10 * 1024 * 1024 * 1024,               # 10 GB — sample value
+    "total_bytes": 16 * 1024 * 1024 * 1024,              # 16 GB — sample value
+    "used_bytes": 6 * 1024 * 1024 * 1024,                # 6 GB — sample value
+    "message": "Alternate GPU sample diagnostic",
+}
+
+
+# ---------------------------------------------------------------------------
+# Method existence
+# ---------------------------------------------------------------------------
+
+
+def test_update_gpu_diagnostics_method_exists() -> None:
+    """Verify GeneWeaverApp exposes update_gpu_diagnostics as a callable."""
+    app = GeneWeaverApp()
+    assert hasattr(app, "update_gpu_diagnostics")
+    assert callable(app.update_gpu_diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# Initial GPU display before any diagnostics call
+# ---------------------------------------------------------------------------
+
+
+def test_initial_gpu_diagnostics_display() -> None:
+    """Verify GPU status and memory widgets show correct initial state before update_gpu_diagnostics is called."""
+    app = GeneWeaverApp()
+
+    # GPU status panel
+    status_w = app.query_one("#gpu-status")
+    device_w = app.query_one("#gpu-device")
+    assert "Not checked" in str(status_w.render())
+    assert "Not detected" in str(device_w.render())
+
+    # GPU memory panel
+    mem_status_w = app.query_one("#gpu-memory-status")
+    mem_total_w = app.query_one("#gpu-memory-total")
+    mem_used_w = app.query_one("#gpu-memory-used")
+    mem_free_w = app.query_one("#gpu-memory-free")
+    assert "Not checked" in str(mem_status_w.render())
+    assert "Not available" in str(mem_total_w.render())
+    assert "Not available" in str(mem_used_w.render())
+    assert "Not available" in str(mem_free_w.render())
+
+
+# ---------------------------------------------------------------------------
+# GPU available path
+# ---------------------------------------------------------------------------
+
+
+def test_update_gpu_diagnostics_when_available_sets_status() -> None:
+    """Verify update_gpu_diagnostics sets GPU status to Available when available=True."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+
+    status_w = app.query_one("#gpu-status")
+    assert "Available" in str(status_w.render())
+
+
+def test_update_gpu_diagnostics_when_available_shows_device_name() -> None:
+    """Verify update_gpu_diagnostics displays the correct device name when GPU is available."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+
+    device_w = app.query_one("#gpu-device")
+    assert "NVIDIA GeForce RTX 9000 (SAMPLE)" in str(device_w.render())
+
+
+def test_update_gpu_diagnostics_when_available_shows_free_memory() -> None:
+    """Verify free GPU memory is displayed correctly when GPU is available."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+
+    free_w = app.query_one("#gpu-memory-free")
+    assert "6.00 GB" in str(free_w.render())
+
+
+def test_update_gpu_diagnostics_when_available_shows_total_memory() -> None:
+    """Verify total GPU memory is displayed correctly when GPU is available."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+
+    total_w = app.query_one("#gpu-memory-total")
+    assert "8.00 GB" in str(total_w.render())
+
+
+def test_update_gpu_diagnostics_when_available_shows_used_memory() -> None:
+    """Verify used GPU memory is displayed correctly when GPU is available."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+
+    used_w = app.query_one("#gpu-memory-used")
+    assert "2.00 GB" in str(used_w.render())
+
+
+def test_update_gpu_diagnostics_when_available_stores_message() -> None:
+    """Verify the diagnostic message is stored on the app instance when GPU is available."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+
+    assert hasattr(app, "_last_gpu_diagnostics_message")
+    assert "GPU detected and ready (sample diagnostic)" in app._last_gpu_diagnostics_message
+
+
+# ---------------------------------------------------------------------------
+# GPU unavailable path
+# ---------------------------------------------------------------------------
+
+
+def test_update_gpu_diagnostics_when_unavailable_sets_status() -> None:
+    """Verify update_gpu_diagnostics sets GPU status to Unavailable when available=False."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_UNAVAILABLE)
+
+    status_w = app.query_one("#gpu-status")
+    assert "Unavailable" in str(status_w.render())
+
+
+def test_update_gpu_diagnostics_when_unavailable_shows_not_detected_for_device() -> None:
+    """Verify GPU device shows 'Not detected' when GPU is unavailable."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_UNAVAILABLE)
+
+    device_w = app.query_one("#gpu-device")
+    assert "Not detected" in str(device_w.render())
+
+
+def test_update_gpu_diagnostics_when_unavailable_shows_not_available_for_memory() -> None:
+    """Verify all memory widgets show 'Not available' when GPU is unavailable."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_UNAVAILABLE)
+
+    total_w = app.query_one("#gpu-memory-total")
+    used_w = app.query_one("#gpu-memory-used")
+    free_w = app.query_one("#gpu-memory-free")
+
+    assert "Not available" in str(total_w.render())
+    assert "Not available" in str(used_w.render())
+    assert "Not available" in str(free_w.render())
+
+
+def test_update_gpu_diagnostics_when_unavailable_stores_message() -> None:
+    """Verify the diagnostic message is stored on the app instance when GPU is unavailable."""
+    app = GeneWeaverApp()
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_UNAVAILABLE)
+
+    assert hasattr(app, "_last_gpu_diagnostics_message")
+    assert "No GPU detected on this machine (sample diagnostic)" in app._last_gpu_diagnostics_message
+
+
+def test_update_gpu_diagnostics_clears_previous_gpu_info_on_unavailable() -> None:
+    """Verify switching from available to unavailable clears old GPU device name and memory."""
+    app = GeneWeaverApp()
+
+    # First mark as available
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+    device_w = app.query_one("#gpu-device")
+    assert "NVIDIA GeForce RTX 9000 (SAMPLE)" in str(device_w.render())
+
+    # Then switch to unavailable — old info must be gone
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_UNAVAILABLE)
+
+    status_w = app.query_one("#gpu-status")
+    assert "Unavailable" in str(status_w.render())
+    assert "NVIDIA GeForce RTX 9000 (SAMPLE)" not in str(device_w.render())
+    assert "Not detected" in str(device_w.render())
+
+    total_w = app.query_one("#gpu-memory-total")
+    used_w = app.query_one("#gpu-memory-used")
+    free_w = app.query_one("#gpu-memory-free")
+    assert "Not available" in str(total_w.render())
+    assert "Not available" in str(used_w.render())
+    assert "Not available" in str(free_w.render())
+
+
+# ---------------------------------------------------------------------------
+# Validation: missing fields
+# ---------------------------------------------------------------------------
+
+
+def test_update_gpu_diagnostics_rejects_missing_available_field() -> None:
+    """Verify ValueError is raised when 'available' is missing from diagnostics dict."""
+    app = GeneWeaverApp()
+    incomplete = dict(_SAMPLE_DIAG_AVAILABLE)
+    del incomplete["available"]
+    with pytest.raises(ValueError, match="available"):
+        app.update_gpu_diagnostics(incomplete)
+
+
+def test_update_gpu_diagnostics_rejects_missing_device_name_field() -> None:
+    """Verify ValueError is raised when 'device_name' is missing from diagnostics dict."""
+    app = GeneWeaverApp()
+    incomplete = dict(_SAMPLE_DIAG_AVAILABLE)
+    del incomplete["device_name"]
+    with pytest.raises(ValueError, match="device_name"):
+        app.update_gpu_diagnostics(incomplete)
+
+
+def test_update_gpu_diagnostics_rejects_missing_free_bytes_field() -> None:
+    """Verify ValueError is raised when 'free_bytes' is missing from diagnostics dict."""
+    app = GeneWeaverApp()
+    incomplete = dict(_SAMPLE_DIAG_AVAILABLE)
+    del incomplete["free_bytes"]
+    with pytest.raises(ValueError, match="free_bytes"):
+        app.update_gpu_diagnostics(incomplete)
+
+
+def test_update_gpu_diagnostics_rejects_missing_total_bytes_field() -> None:
+    """Verify ValueError is raised when 'total_bytes' is missing from diagnostics dict."""
+    app = GeneWeaverApp()
+    incomplete = dict(_SAMPLE_DIAG_AVAILABLE)
+    del incomplete["total_bytes"]
+    with pytest.raises(ValueError, match="total_bytes"):
+        app.update_gpu_diagnostics(incomplete)
+
+
+def test_update_gpu_diagnostics_rejects_missing_used_bytes_field() -> None:
+    """Verify ValueError is raised when 'used_bytes' is missing from diagnostics dict."""
+    app = GeneWeaverApp()
+    incomplete = dict(_SAMPLE_DIAG_AVAILABLE)
+    del incomplete["used_bytes"]
+    with pytest.raises(ValueError, match="used_bytes"):
+        app.update_gpu_diagnostics(incomplete)
+
+
+def test_update_gpu_diagnostics_rejects_missing_message_field() -> None:
+    """Verify ValueError is raised when 'message' is missing from diagnostics dict."""
+    app = GeneWeaverApp()
+    incomplete = dict(_SAMPLE_DIAG_AVAILABLE)
+    del incomplete["message"]
+    with pytest.raises(ValueError, match="message"):
+        app.update_gpu_diagnostics(incomplete)
+
+
+def test_update_gpu_diagnostics_rejects_empty_dict() -> None:
+    """Verify ValueError is raised when an empty dict is passed."""
+    app = GeneWeaverApp()
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics({})
+
+
+# ---------------------------------------------------------------------------
+# Validation: invalid 'available' values
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_available", [1, 0, "true", "false", None, 1.0, [], {}])
+def test_update_gpu_diagnostics_rejects_non_bool_available(bad_available) -> None:
+    """Verify ValueError is raised when 'available' is not a strict boolean."""
+    app = GeneWeaverApp()
+    diag = dict(_SAMPLE_DIAG_AVAILABLE)
+    diag["available"] = bad_available
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics(diag)
+
+
+# ---------------------------------------------------------------------------
+# Validation: invalid memory values (available=True)
+# ---------------------------------------------------------------------------
+
+
+def test_update_gpu_diagnostics_rejects_negative_free_bytes() -> None:
+    """Verify ValueError is raised for negative free_bytes when GPU is available."""
+    app = GeneWeaverApp()
+    diag = dict(_SAMPLE_DIAG_AVAILABLE)
+    diag["free_bytes"] = -1
+    diag["used_bytes"] = diag["total_bytes"] - diag["free_bytes"]  # would be wrong anyway
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics(diag)
+
+
+def test_update_gpu_diagnostics_rejects_negative_total_bytes() -> None:
+    """Verify ValueError is raised for negative total_bytes when GPU is available."""
+    app = GeneWeaverApp()
+    diag = dict(_SAMPLE_DIAG_AVAILABLE)
+    diag["total_bytes"] = -1
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics(diag)
+
+
+def test_update_gpu_diagnostics_rejects_negative_used_bytes() -> None:
+    """Verify ValueError is raised for negative used_bytes when GPU is available."""
+    app = GeneWeaverApp()
+    diag = dict(_SAMPLE_DIAG_AVAILABLE)
+    diag["used_bytes"] = -1
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics(diag)
+
+
+def test_update_gpu_diagnostics_rejects_free_greater_than_total() -> None:
+    """Verify ValueError is raised when free_bytes > total_bytes."""
+    app = GeneWeaverApp()
+    total = 4 * 1024 * 1024 * 1024    # 4 GB — sample value
+    free = 6 * 1024 * 1024 * 1024     # 6 GB > total — invalid sample
+    diag = {
+        "available": True,
+        "device_name": "Sample GPU",
+        "total_bytes": total,
+        "free_bytes": free,
+        "used_bytes": 0,               # doesn't matter — free > total is caught first
+        "message": "sample",
+    }
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics(diag)
+
+
+# ---------------------------------------------------------------------------
+# Validation: incorrect used_bytes calculation
+# ---------------------------------------------------------------------------
+
+
+def test_update_gpu_diagnostics_rejects_incorrect_used_bytes_calculation() -> None:
+    """Verify ValueError is raised when used_bytes != total_bytes - free_bytes."""
+    app = GeneWeaverApp()
+    total = 8 * 1024 * 1024 * 1024     # 8 GB — sample value
+    free = 6 * 1024 * 1024 * 1024      # 6 GB — sample value
+    wrong_used = 1 * 1024 * 1024 * 1024   # 1 GB — wrong (should be 2 GB)
+    diag = {
+        "available": True,
+        "device_name": "Sample GPU",
+        "total_bytes": total,
+        "free_bytes": free,
+        "used_bytes": wrong_used,       # intentionally incorrect — test value only
+        "message": "sample",
+    }
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics(diag)
+
+
+# ---------------------------------------------------------------------------
+# Validation: unavailable with non-None values
+# ---------------------------------------------------------------------------
+
+
+def test_update_gpu_diagnostics_rejects_non_none_device_when_unavailable() -> None:
+    """Verify ValueError is raised when device_name is not None for an unavailable GPU."""
+    app = GeneWeaverApp()
+    diag = dict(_SAMPLE_DIAG_UNAVAILABLE)
+    diag["device_name"] = "Some GPU"   # must be None when unavailable
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics(diag)
+
+
+def test_update_gpu_diagnostics_rejects_non_none_memory_when_unavailable() -> None:
+    """Verify ValueError is raised when memory values are not None for an unavailable GPU."""
+    app = GeneWeaverApp()
+    diag = dict(_SAMPLE_DIAG_UNAVAILABLE)
+    diag["free_bytes"] = 1024          # must be None when unavailable
+    with pytest.raises(ValueError):
+        app.update_gpu_diagnostics(diag)
+
+
+# ---------------------------------------------------------------------------
+# Multiple updates
+# ---------------------------------------------------------------------------
+
+
+def test_update_gpu_diagnostics_multiple_times() -> None:
+    """Verify update_gpu_diagnostics can be called repeatedly replacing displayed values."""
+    app = GeneWeaverApp()
+
+    # 1. Available with first sample
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+    assert "Available" in str(app.query_one("#gpu-status").render())
+    assert "NVIDIA GeForce RTX 9000 (SAMPLE)" in str(app.query_one("#gpu-device").render())
+    assert "8.00 GB" in str(app.query_one("#gpu-memory-total").render())
+
+    # 2. Unavailable — clears previous info
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_UNAVAILABLE)
+    assert "Unavailable" in str(app.query_one("#gpu-status").render())
+    assert "Not detected" in str(app.query_one("#gpu-device").render())
+    assert "Not available" in str(app.query_one("#gpu-memory-total").render())
+
+    # 3. Available again with alternate sample
+    app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE_ALT)
+    assert "Available" in str(app.query_one("#gpu-status").render())
+    assert "AMD Radeon RX 9700 (SAMPLE)" in str(app.query_one("#gpu-device").render())
+    assert "16.00 GB" in str(app.query_one("#gpu-memory-total").render())
+    assert "10.00 GB" in str(app.query_one("#gpu-memory-free").render())
+    assert "6.00 GB" in str(app.query_one("#gpu-memory-used").render())
+
+
+# ---------------------------------------------------------------------------
+# Existing dashboard features unaffected
+# ---------------------------------------------------------------------------
+
+
+def test_existing_dashboard_features_unaffected_by_gpu_diagnostics() -> None:
+    """Verify all pre-existing dashboard features still work after adding update_gpu_diagnostics."""
+    async def _inner():
+        app = GeneWeaverApp()
+        async with app.run_test() as pilot:
+            # Scan status
+            app.update_scan_status("Scanning")
+            assert app.scan_status == "Scanning"
+
+            # Progress
+            app.update_scan_progress(50)
+            assert app.scan_progress == 50
+
+            # Results table
+            app.update_alignment_results([_SAMPLE_RESULT_1, _SAMPLE_RESULT_2])
+            table = app.query_one("#alignment-results-table", DataTable)
+            assert table.row_count == 2
+
+            # Demo mode
+            app.load_demo_results()
+            assert app.is_demo_mode is True
+            demo_lbl = app.query_one("#demo-data-label", Label)
+            assert demo_lbl.display is True
+
+            # Benchmark panel
+            app.update_benchmark_results(_SAMPLE_BENCH_GPU_AVAILABLE)
+            cpu_lbl = app.query_one("#cpu-benchmark-time", Label)
+            assert "200.000 ms" in str(cpu_lbl.render())
+
+            # GPU diagnostics (available)
+            app.update_gpu_diagnostics(_SAMPLE_DIAG_AVAILABLE)
+            assert "Available" in str(app.query_one("#gpu-status", Label).render())
+            assert "NVIDIA GeForce RTX 9000 (SAMPLE)" in str(app.query_one("#gpu-device", Label).render())
+            assert "8.00 GB" in str(app.query_one("#gpu-memory-total", Label).render())
+
+            # GPU diagnostics (unavailable) — previous info cleared
+            app.update_gpu_diagnostics(_SAMPLE_DIAG_UNAVAILABLE)
+            assert "Unavailable" in str(app.query_one("#gpu-status", Label).render())
+            assert "Not available" in str(app.query_one("#gpu-memory-total", Label).render())
+
+    _run(_inner())
